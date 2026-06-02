@@ -1,0 +1,856 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  INVITED
+}
+
+enum MasterDataStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum RetailerStatus {
+  ACTIVE
+  ON_HOLD
+  INACTIVE
+}
+
+enum SalesRepStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum BatchStatus {
+  ACTIVE
+  BLOCKED
+  EXPIRED
+}
+
+enum StockState {
+  AVAILABLE
+  RESERVED
+  IN_TRANSIT
+  DAMAGED
+  EXPIRED
+  QUARANTINED
+  RETURNED_PENDING_CHECK
+  ADJUSTED
+}
+
+enum InventoryEventType {
+  OPENING_STOCK
+  MANUAL_ADJUSTMENT
+  STOCK_ADJUSTMENT_APPROVED
+  SALE_DEDUCTED
+  REVERSAL_EVENT
+}
+
+enum InventoryEventStatus {
+  DRAFT
+  POSTED
+  REVERSED
+}
+
+enum InventoryMovementType {
+  STOCK_IN
+  STOCK_OUT
+  ADJUSTMENT
+  SALE_DEDUCTION
+  REVERSAL
+}
+
+enum ReferenceType {
+  STOCK_ADJUSTMENT
+  INVOICE
+  PAYMENT
+  RETAILER
+  PRODUCT
+  BATCH
+  BRANCH
+  WAREHOUSE
+  USER
+  ROLE
+  SALES_REP
+  AUTH
+  DASHBOARD
+}
+
+enum StockAdjustmentStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  POSTED
+  CANCELLED
+}
+
+enum InvoiceType {
+  SALE
+}
+
+enum InvoiceStatus {
+  DRAFT
+  POSTED
+  PAID
+  PARTIALLY_PAID
+  CREDIT_OPEN
+  VOIDED
+  CANCELLED
+}
+
+enum InvoicePaymentStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+}
+
+enum PaymentMethod {
+  CASH
+  QR
+  BANK
+  WALLET
+  CHEQUE
+}
+
+enum PaymentStatus {
+  RECORDED
+  VOIDED
+}
+
+enum RetailerLedgerEntryType {
+  INVOICE_DEBIT
+  PAYMENT_CREDIT
+  REVERSAL
+  ADJUSTMENT
+}
+
+enum FinancialLedgerEntryType {
+  CASH_DEBIT
+  RECEIVABLE_DEBIT
+  SALES_CREDIT
+  PAYMENT_CREDIT
+}
+
+enum AuditAction {
+  LOGIN_SUCCESS
+  LOGIN_FAILURE
+  USER_CREATED
+  USER_UPDATED
+  ROLE_ASSIGNED
+  BRANCH_CREATED
+  BRANCH_UPDATED
+  BRANCH_DEACTIVATED
+  WAREHOUSE_CREATED
+  WAREHOUSE_UPDATED
+  WAREHOUSE_DEACTIVATED
+  CATEGORY_CREATED
+  CATEGORY_UPDATED
+  UNIT_CREATED
+  UNIT_UPDATED
+  PRODUCT_CREATED
+  PRODUCT_UPDATED
+  BATCH_CREATED
+  BATCH_UPDATED
+  STOCK_ADJUSTMENT_CREATED
+  STOCK_ADJUSTMENT_SUBMITTED
+  STOCK_ADJUSTMENT_APPROVED
+  STOCK_ADJUSTMENT_POSTED
+  RETAILER_CREATED
+  RETAILER_UPDATED
+  SALES_REP_CREATED
+  SALES_REP_UPDATED
+  INVOICE_CREATED
+  INVOICE_UPDATED
+  INVOICE_POSTED
+  INVOICE_VOIDED
+  INVOICE_CANCELLED
+  PAYMENT_RECORDED
+}
+
+model User {
+  id              String     @id @default(uuid())
+  fullName        String
+  phone           String     @unique
+  email           String     @unique
+  passwordHash    String
+  status          UserStatus @default(INVITED)
+  defaultBranchId String?
+  lastLoginAt     DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  deletedAt       DateTime?
+
+  defaultBranch             Branch?               @relation("UserDefaultBranch", fields: [defaultBranchId], references: [id], onDelete: SetNull)
+  sessions                  Session[]
+  loginAttempts             LoginAttempt[]
+  userRoles                 UserRole[]
+  auditLogs                 AuditLog[]            @relation("AuditActor")
+  createdInventoryEvents    InventoryEvent[]      @relation("InventoryEventCreator")
+  approvedInventoryEvents   InventoryEvent[]      @relation("InventoryEventApprover")
+  createdMovements          InventoryMovement[]   @relation("InventoryMovementCreator")
+  createdStockAdjustments   StockAdjustment[]     @relation("StockAdjustmentCreator")
+  submittedStockAdjustments StockAdjustment[]     @relation("StockAdjustmentSubmitter")
+  approvedStockAdjustments  StockAdjustment[]     @relation("StockAdjustmentApprover")
+  postedStockAdjustments    StockAdjustment[]     @relation("StockAdjustmentPoster")
+  createdRetailers          Retailer[]            @relation("RetailerCreator")
+  createdSalesReps          SalesRep[]            @relation("SalesRepCreator")
+  salesRepProfile           SalesRep?
+  createdInvoices           Invoice[]             @relation("InvoiceCreator")
+  postedInvoices            Invoice[]             @relation("InvoicePoster")
+  voidedInvoices            Invoice[]             @relation("InvoiceVoider")
+  receivedPayments          Payment[]             @relation("PaymentReceiver")
+  retailerLedgerEntries     RetailerLedgerEntry[] @relation("RetailerLedgerCreator")
+  financialLedgerEntries    FinancialLedgerEntry[] @relation("FinancialLedgerCreator")
+
+  @@index([status])
+  @@index([defaultBranchId])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  tokenHash    String   @unique
+  expiresAt    DateTime
+  userAgent    String?
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+  revokedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model LoginAttempt {
+  id            String   @id @default(uuid())
+  userId        String?
+  email         String?
+  phone         String?
+  success       Boolean
+  failureReason String?
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([email])
+  @@index([phone])
+  @@index([createdAt])
+}
+
+model Role {
+  id           String   @id @default(uuid())
+  code         String   @unique
+  name         String
+  description  String?
+  isSystemRole Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  permissions RolePermission[]
+  userRoles   UserRole[]
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  module      String
+  action      String
+  description String?
+  createdAt   DateTime @default(now())
+
+  roles RolePermission[]
+
+  @@index([module])
+  @@index([action])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model UserRole {
+  id          String   @id @default(uuid())
+  userId      String
+  roleId      String
+  branchId    String?
+  warehouseId String?
+  createdAt   DateTime @default(now())
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  branch    Branch?    @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  warehouse Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, roleId, branchId, warehouseId])
+  @@index([userId])
+  @@index([roleId])
+  @@index([branchId])
+  @@index([warehouseId])
+}
+
+model Branch {
+  id            String           @id @default(uuid())
+  code          String           @unique
+  name          String
+  city          String
+  district      String
+  region        String?
+  phone         String?
+  email         String?
+  contactPerson String?
+  status        MasterDataStatus @default(ACTIVE)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  deletedAt     DateTime?
+
+  defaultUsers          User[]                @relation("UserDefaultBranch")
+  warehouses            Warehouse[]
+  inventoryLocations    InventoryLocation[]
+  userRoles             UserRole[]
+  inventoryEvents       InventoryEvent[]
+  inventoryMovements    InventoryMovement[]
+  stockAdjustments      StockAdjustment[]
+  retailers             Retailer[]
+  salesReps             SalesRep[]
+  invoices              Invoice[]
+  payments              Payment[]
+  retailerLedgerEntries RetailerLedgerEntry[]
+  financialLedgerEntries FinancialLedgerEntry[]
+  auditLogs             AuditLog[]
+
+  @@index([status])
+}
+
+model Warehouse {
+  id        String           @id @default(uuid())
+  branchId  String
+  code      String
+  name      String
+  status    MasterDataStatus @default(ACTIVE)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  deletedAt DateTime?
+
+  branch            Branch             @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  inventoryLocation InventoryLocation?
+  userRoles         UserRole[]
+  stockAdjustments  StockAdjustment[]
+  invoices          Invoice[]
+
+  @@unique([branchId, code])
+  @@index([branchId])
+  @@index([status])
+}
+
+model InventoryLocation {
+  id          String           @id @default(uuid())
+  branchId    String
+  warehouseId String?          @unique
+  code        String
+  name        String
+  type        String           @default("WAREHOUSE")
+  status      MasterDataStatus @default(ACTIVE)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  branch             Branch              @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  warehouse          Warehouse?          @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  snapshots          InventorySnapshot[]
+  movements          InventoryMovement[]
+  stockAdjustments   StockAdjustment[]
+  invoices           Invoice[]
+
+  @@unique([branchId, code])
+  @@index([branchId])
+  @@index([status])
+}
+
+model Category {
+  id          String           @id @default(uuid())
+  code        String           @unique
+  name        String
+  description String?
+  status      MasterDataStatus @default(ACTIVE)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  products Product[]
+}
+
+model Brand {
+  id        String           @id @default(uuid())
+  code      String           @unique
+  name      String
+  status    MasterDataStatus @default(ACTIVE)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  products Product[]
+}
+
+model Unit {
+  id        String           @id @default(uuid())
+  code      String           @unique
+  name      String
+  symbol    String
+  status    MasterDataStatus @default(ACTIVE)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  defaultForProducts Product[]            @relation("ProductDefaultUnit")
+  productUnits       ProductUnit[]
+  snapshots          InventorySnapshot[]
+  movements          InventoryMovement[]
+  stockAdjustmentItems StockAdjustmentItem[]
+  invoiceItems       InvoiceItem[]
+}
+
+model Product {
+  id              String   @id @default(uuid())
+  skuCode         String   @unique
+  name            String
+  description     String?
+  categoryId      String
+  brandId         String?
+  defaultUnitId   String
+  barcode         String?
+  isBatchTracked  Boolean  @default(true)
+  isExpiryTracked Boolean  @default(false)
+  costPrice       Decimal? @db.Decimal(18, 4)
+  mrp             Decimal? @db.Decimal(18, 4)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  category             Category              @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  brand                Brand?                @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  defaultUnit          Unit                  @relation("ProductDefaultUnit", fields: [defaultUnitId], references: [id], onDelete: Restrict)
+  productUnits         ProductUnit[]
+  batches              Batch[]
+  snapshots            InventorySnapshot[]
+  movements            InventoryMovement[]
+  stockAdjustmentItems StockAdjustmentItem[]
+  invoiceItems         InvoiceItem[]
+
+  @@index([categoryId])
+  @@index([brandId])
+  @@index([defaultUnitId])
+  @@index([barcode])
+  @@index([isActive])
+}
+
+model ProductUnit {
+  id                 String   @id @default(uuid())
+  productId          String
+  unitId             String
+  conversionToBase   Decimal  @db.Decimal(18, 6)
+  isBaseUnit         Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  unit    Unit    @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@unique([productId, unitId])
+  @@index([productId])
+  @@index([unitId])
+}
+
+model Batch {
+  id                String      @id @default(uuid())
+  productId         String
+  batchNumber       String
+  manufacturingDate DateTime?
+  expiryDate        DateTime?
+  supplierName      String?
+  costPrice         Decimal?    @db.Decimal(18, 4)
+  mrp               Decimal?    @db.Decimal(18, 4)
+  status            BatchStatus @default(ACTIVE)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  product              Product               @relation(fields: [productId], references: [id], onDelete: Restrict)
+  snapshots            InventorySnapshot[]
+  movements            InventoryMovement[]
+  stockAdjustmentItems StockAdjustmentItem[]
+  invoiceItems         InvoiceItem[]
+
+  @@unique([productId, batchNumber])
+  @@index([productId])
+  @@index([expiryDate])
+  @@index([status])
+}
+
+model InventoryEvent {
+  id                String               @id @default(uuid())
+  eventType         InventoryEventType
+  eventStatus       InventoryEventStatus @default(POSTED)
+  branchId          String
+  referenceType     ReferenceType
+  referenceId       String
+  idempotencyKey    String?              @unique
+  reversalOfEventId String?
+  createdById       String
+  approvedById      String?
+  occurredAt        DateTime             @default(now())
+  metadata          Json?
+  createdAt         DateTime             @default(now())
+
+  branch          Branch              @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  createdBy       User                @relation("InventoryEventCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy      User?               @relation("InventoryEventApprover", fields: [approvedById], references: [id], onDelete: Restrict)
+  reversalOfEvent InventoryEvent?     @relation("InventoryEventReversal", fields: [reversalOfEventId], references: [id], onDelete: Restrict)
+  reversalEvents  InventoryEvent[]    @relation("InventoryEventReversal")
+  movements       InventoryMovement[]
+
+  @@index([branchId])
+  @@index([eventType])
+  @@index([referenceType, referenceId])
+  @@index([occurredAt])
+}
+
+model InventoryMovement {
+  id                 String                @id @default(uuid())
+  inventoryEventId   String
+  branchId           String
+  locationId         String
+  productId          String
+  batchId            String?
+  stockState         StockState            @default(AVAILABLE)
+  quantityDelta      Decimal               @db.Decimal(18, 6)
+  baseQuantityDelta  Decimal               @db.Decimal(18, 6)
+  unitId             String
+  movementType       InventoryMovementType
+  referenceType      ReferenceType
+  referenceId        String
+  reasonCode         String?
+  createdById        String
+  occurredAt         DateTime              @default(now())
+  metadata           Json?
+  createdAt          DateTime              @default(now())
+
+  inventoryEvent InventoryEvent    @relation(fields: [inventoryEventId], references: [id], onDelete: Restrict)
+  branch         Branch            @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  location       InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  product        Product           @relation(fields: [productId], references: [id], onDelete: Restrict)
+  batch          Batch?            @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  unit           Unit              @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  createdBy      User              @relation("InventoryMovementCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([inventoryEventId])
+  @@index([branchId])
+  @@index([locationId])
+  @@index([productId])
+  @@index([batchId])
+  @@index([referenceType, referenceId])
+  @@index([occurredAt])
+}
+
+model InventorySnapshot {
+  id             String     @id @default(uuid())
+  locationId     String
+  productId      String
+  batchId        String?
+  stockState     StockState @default(AVAILABLE)
+  unitId         String
+  quantity       Decimal    @default(0) @db.Decimal(18, 6)
+  baseQuantity   Decimal    @default(0) @db.Decimal(18, 6)
+  version        Int        @default(0)
+  lastMovementId String?
+  lastMovementAt DateTime?
+  updatedAt      DateTime   @updatedAt
+
+  location InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  product  Product           @relation(fields: [productId], references: [id], onDelete: Restrict)
+  batch    Batch?            @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  unit     Unit              @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@unique([locationId, productId, batchId, stockState])
+  @@index([locationId])
+  @@index([productId])
+  @@index([batchId])
+  @@index([stockState])
+}
+
+model StockAdjustment {
+  id           String                @id @default(uuid())
+  adjustmentNo String                @unique
+  branchId     String
+  warehouseId  String
+  locationId   String
+  status       StockAdjustmentStatus @default(DRAFT)
+  reason       String
+  notes        String?
+  createdById  String
+  submittedById String?
+  approvedById String?
+  postedById   String?
+  submittedAt  DateTime?
+  approvedAt   DateTime?
+  postedAt     DateTime?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  branch      Branch             @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  warehouse   Warehouse          @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  location    InventoryLocation  @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  createdBy   User               @relation("StockAdjustmentCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  submittedBy User?              @relation("StockAdjustmentSubmitter", fields: [submittedById], references: [id], onDelete: Restrict)
+  approvedBy  User?              @relation("StockAdjustmentApprover", fields: [approvedById], references: [id], onDelete: Restrict)
+  postedBy    User?              @relation("StockAdjustmentPoster", fields: [postedById], references: [id], onDelete: Restrict)
+  items       StockAdjustmentItem[]
+
+  @@index([branchId])
+  @@index([warehouseId])
+  @@index([locationId])
+  @@index([status])
+}
+
+model StockAdjustmentItem {
+  id                 String   @id @default(uuid())
+  stockAdjustmentId  String
+  productId          String
+  batchId            String?
+  unitId             String
+  stockState         StockState @default(AVAILABLE)
+  quantityDelta      Decimal  @db.Decimal(18, 6)
+  baseQuantityDelta  Decimal  @db.Decimal(18, 6)
+  reasonCode         String?
+  notes              String?
+  createdAt          DateTime @default(now())
+
+  stockAdjustment StockAdjustment @relation(fields: [stockAdjustmentId], references: [id], onDelete: Cascade)
+  product         Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  batch           Batch?          @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  unit            Unit            @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@index([stockAdjustmentId])
+  @@index([productId])
+  @@index([batchId])
+}
+
+model Retailer {
+  id          String         @id @default(uuid())
+  branchId    String
+  code        String
+  shopName    String
+  ownerName   String
+  phone       String
+  address     String?
+  creditLimit Decimal        @default(0) @db.Decimal(18, 4)
+  status      RetailerStatus @default(ACTIVE)
+  createdById String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  deletedAt   DateTime?
+
+  branch        Branch                @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  createdBy     User                  @relation("RetailerCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  invoices      Invoice[]
+  payments      Payment[]
+  ledgerEntries RetailerLedgerEntry[]
+
+  @@unique([branchId, code])
+  @@index([branchId])
+  @@index([phone])
+  @@index([status])
+}
+
+model SalesRep {
+  id           String         @id @default(uuid())
+  userId       String         @unique
+  branchId     String
+  employeeCode String
+  status       SalesRepStatus @default(ACTIVE)
+  createdById  String
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  deletedAt    DateTime?
+
+  user      User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  branch    Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  createdBy User   @relation("SalesRepCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@unique([branchId, employeeCode])
+  @@index([branchId])
+  @@index([status])
+}
+
+model Invoice {
+  id               String               @id @default(uuid())
+  branchId         String
+  invoiceNumber    String               @unique
+  invoiceType      InvoiceType          @default(SALE)
+  retailerId       String?
+  warehouseId      String
+  sourceLocationId String
+  status           InvoiceStatus        @default(DRAFT)
+  paymentStatus    InvoicePaymentStatus @default(UNPAID)
+  subtotal         Decimal              @default(0) @db.Decimal(18, 4)
+  discountTotal    Decimal              @default(0) @db.Decimal(18, 4)
+  taxTotal         Decimal              @default(0) @db.Decimal(18, 4)
+  grandTotal       Decimal              @default(0) @db.Decimal(18, 4)
+  paidAmount       Decimal              @default(0) @db.Decimal(18, 4)
+  dueAmount        Decimal              @default(0) @db.Decimal(18, 4)
+  createdById      String
+  postedById       String?
+  voidedById       String?
+  postedAt         DateTime?
+  voidedAt         DateTime?
+  voidReason       String?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  branch         Branch            @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  retailer       Retailer?         @relation(fields: [retailerId], references: [id], onDelete: Restrict)
+  warehouse      Warehouse         @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  sourceLocation InventoryLocation @relation(fields: [sourceLocationId], references: [id], onDelete: Restrict)
+  createdBy      User              @relation("InvoiceCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  postedBy       User?             @relation("InvoicePoster", fields: [postedById], references: [id], onDelete: Restrict)
+  voidedBy       User?             @relation("InvoiceVoider", fields: [voidedById], references: [id], onDelete: Restrict)
+  items          InvoiceItem[]
+  payments       Payment[]
+
+  @@index([branchId])
+  @@index([retailerId])
+  @@index([warehouseId])
+  @@index([sourceLocationId])
+  @@index([status])
+  @@index([paymentStatus])
+  @@index([createdAt])
+}
+
+model InvoiceItem {
+  id             String  @id @default(uuid())
+  invoiceId      String
+  productId      String
+  batchId        String?
+  unitId         String
+  quantity       Decimal @db.Decimal(18, 6)
+  baseQuantity   Decimal @db.Decimal(18, 6)
+  unitPrice      Decimal @db.Decimal(18, 4)
+  discountAmount Decimal @default(0) @db.Decimal(18, 4)
+  taxAmount      Decimal @default(0) @db.Decimal(18, 4)
+  lineTotal      Decimal @db.Decimal(18, 4)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  batch   Batch?  @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  unit    Unit    @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@index([invoiceId])
+  @@index([productId])
+  @@index([batchId])
+}
+
+model Payment {
+  id              String        @id @default(uuid())
+  branchId        String
+  paymentNumber   String        @unique
+  retailerId      String?
+  invoiceId       String?
+  amount          Decimal       @db.Decimal(18, 4)
+  method          PaymentMethod
+  referenceNumber String?
+  receivedById    String
+  receivedAt      DateTime      @default(now())
+  status          PaymentStatus @default(RECORDED)
+  createdAt       DateTime      @default(now())
+
+  branch     Branch    @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  retailer   Retailer? @relation(fields: [retailerId], references: [id], onDelete: Restrict)
+  invoice    Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  receivedBy User      @relation("PaymentReceiver", fields: [receivedById], references: [id], onDelete: Restrict)
+
+  @@index([branchId])
+  @@index([retailerId])
+  @@index([invoiceId])
+  @@index([receivedAt])
+}
+
+model RetailerLedgerEntry {
+  id            String                  @id @default(uuid())
+  branchId      String
+  retailerId    String
+  entryType     RetailerLedgerEntryType
+  referenceType ReferenceType
+  referenceId   String
+  debitAmount   Decimal                 @default(0) @db.Decimal(18, 4)
+  creditAmount  Decimal                 @default(0) @db.Decimal(18, 4)
+  balanceAfter  Decimal?                @db.Decimal(18, 4)
+  createdById   String
+  createdAt     DateTime                @default(now())
+
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  retailer  Retailer @relation(fields: [retailerId], references: [id], onDelete: Restrict)
+  createdBy User     @relation("RetailerLedgerCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([branchId])
+  @@index([retailerId])
+  @@index([entryType])
+  @@index([referenceType, referenceId])
+  @@index([createdAt])
+}
+
+model FinancialLedgerEntry {
+  id            String                   @id @default(uuid())
+  branchId      String
+  entryType     FinancialLedgerEntryType
+  referenceType ReferenceType
+  referenceId   String
+  debitAmount   Decimal                  @default(0) @db.Decimal(18, 4)
+  creditAmount  Decimal                  @default(0) @db.Decimal(18, 4)
+  createdById   String
+  createdAt     DateTime                 @default(now())
+
+  branch    Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  createdBy User   @relation("FinancialLedgerCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([branchId])
+  @@index([referenceType, referenceId])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id          String      @id @default(uuid())
+  branchId    String?
+  actorUserId String
+  action      AuditAction
+  entityType  ReferenceType
+  entityId    String
+  beforeData  Json?
+  afterData   Json?
+  reason      String?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime    @default(now())
+
+  branch Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  actor  User    @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([branchId])
+  @@index([actorUserId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}

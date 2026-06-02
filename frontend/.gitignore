@@ -1,0 +1,35 @@
+# Next.js
+.next
+dist
+out
+
+# Dependencies
+node_modules
+yarn.lock
+
+# Environment
+.env.local
+.env.*.local
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+
+# Testing
+coverage
+.nyc_output
+
+# Build
+build
+.turbo
+
+# Service Worker
+sw.js
+workbox-*.js.map

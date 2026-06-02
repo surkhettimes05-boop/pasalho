@@ -1,0 +1,51 @@
+# Frontend production build
+FROM node:18-alpine AS frontend-builder
+
+WORKDIR /app
+
+COPY frontend/package*.json ./
+RUN npm ci
+
+COPY frontend ./
+RUN npm run build
+
+# Backend build
+FROM node:18-alpine AS backend-builder
+
+WORKDIR /app
+
+COPY backend/package*.json ./
+RUN npm ci
+
+COPY backend ./
+RUN npm run build
+
+# Production - Frontend
+FROM node:18-alpine AS frontend-runtime
+
+WORKDIR /app
+
+COPY --from=frontend-builder /app/package*.json ./
+RUN npm ci --only=production
+
+COPY --from=frontend-builder /app/.next ./.next
+COPY --from=frontend-builder /app/public ./public
+
+EXPOSE 3001
+
+CMD ["npm", "start"]
+
+# Production - Backend
+FROM node:18-alpine AS backend-runtime
+
+WORKDIR /app
+
+COPY --from=backend-builder /app/package*.json ./
+RUN npm ci --only=production
+
+COPY --from=backend-builder /app/dist ./dist
+COPY backend/prisma ./prisma
+
+EXPOSE 3000
+
+CMD ["node", "dist/main.js"]
