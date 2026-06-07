@@ -6,19 +6,21 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Global validation
-  app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
 
-  // API prefix
-  app.setGlobal('prefix', 'api');
+  app.setGlobalPrefix('api/v1');
 
-  // CORS
   app.enableCors({
     origin: process.env.CORS_ORIGIN || 'http://localhost:3001',
     credentials: true,
   });
 
-  // Swagger/OpenAPI
   const config = new DocumentBuilder()
     .setTitle('PASALO OS API')
     .setDescription('FMCG Distribution Operating System API')
@@ -31,8 +33,8 @@ async function bootstrap() {
 
   const port = process.env.PORT || 3000;
   await app.listen(port, () => {
-    console.log(`🚀 Application running on http://localhost:${port}`);
-    console.log(`📚 Swagger documentation available at http://localhost:${port}/docs`);
+    console.log(`Application running on http://localhost:${port}/api/v1`);
+    console.log(`Swagger documentation available at http://localhost:${port}/docs`);
   });
 }
 
