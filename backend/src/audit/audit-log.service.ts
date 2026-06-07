@@ -19,7 +19,8 @@ export interface AuditLogInput {
 export class AuditLogService {
   constructor(private readonly prisma: PrismaService) {}
 
-  record(input: AuditLogInput, tx: Prisma.TransactionClient = this.prisma) {
-    return tx.auditLog.create({ data: input });
+  record(input: AuditLogInput, tx?: Prisma.TransactionClient) {
+    const client = tx ?? this.prisma;
+    return client.auditLog.create({ data: input });
   }
 }

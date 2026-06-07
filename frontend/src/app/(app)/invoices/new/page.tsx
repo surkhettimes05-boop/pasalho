@@ -168,10 +168,12 @@ export default function NewInvoicePage() {
       const posted = await salesApi.postInvoice(inv.id);
       const total = Number(posted.grandTotal) || 0;
       if (total > 0) {
-        await api.post('/sales/payments', {
+        await api.post('/payments', {
+          branchId: posted.branchId,
           invoiceId: posted.id,
+          retailerId: posted.retailerId,
           amount: total,
-          paymentMethod: 'CASH',
+          method: 'CASH',
         });
       }
       return posted;

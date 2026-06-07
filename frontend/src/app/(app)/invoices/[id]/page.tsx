@@ -245,11 +245,11 @@ function PaymentModal({
 
   const payMut = useMutation({
     mutationFn: () =>
-      api.post('/sales/payments', {
+      api.post('/payments', {
         invoiceId,
         amount: Number(amount),
-        paymentMethod: method,
-        reference: reference.trim() || undefined,
+        method,
+        referenceNumber: reference.trim() || undefined,
       }),
     onSuccess: () => {
       toast({ title: 'Payment recorded', variant: 'success' });

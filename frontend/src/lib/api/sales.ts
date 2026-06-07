@@ -55,8 +55,12 @@ export interface Invoice {
 }
 
 export const salesApi = {
-  async listRetailers(): Promise<PaginatedResponse<Retailer>> {
-    return api.get('/retailers');
+  async listRetailers(params?: { page?: number; limit?: number; search?: string }): Promise<PaginatedResponse<Retailer>> {
+    const q = new URLSearchParams();
+    if (params?.page) q.set('page', String(params.page));
+    if (params?.limit) q.set('limit', String(params.limit ?? 200));
+    if (params?.search) q.set('search', params.search);
+    return api.get(`/retailers?${q.toString()}`);
   },
   async listInvoices(params?: { branchId?: string; page?: number; limit?: number }): Promise<PaginatedResponse<Invoice>> {
     const q = new URLSearchParams();

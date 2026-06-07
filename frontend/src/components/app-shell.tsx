@@ -36,12 +36,27 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="flex h-16 items-center border-b px-6">
           <span className="text-lg font-bold text-blue-600">PASALO OS</span>
         </div>
-        <nav className="flex-1 space-y-1 px-3 py-4 text-sm">
+        <nav className="flex-1 overflow-y-auto px-3 py-4 text-sm">
+          <div className="mb-1 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Overview</div>
           <NavItem href="/dashboard" label="Dashboard" />
+
+          <div className="mb-1 mt-4 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Organisation</div>
+          <NavItem href="/branches" label="Branches" />
+          <NavItem href="/warehouses" label="Warehouses" />
+
+          <div className="mb-1 mt-4 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Catalog & Stock</div>
           <NavItem href="/products" label="Products" />
           <NavItem href="/stock" label="Stock" />
-          <NavItem href="/invoices" label="Invoices" />
+          <NavItem href="/stock/adjustments" label="Adjustments" />
+
+          <div className="mb-1 mt-4 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Sales & Finance</div>
           <NavItem href="/invoices/new" label="New Invoice (POS)" />
+          <NavItem href="/invoices" label="Invoices" />
+          <NavItem href="/payments" label="Payments" />
+          <NavItem href="/retailers" label="Retailers" />
+
+          <div className="mb-1 mt-4 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Admin</div>
+          <NavItem href="/audit-logs" label="Audit Logs" />
         </nav>
         <div className="border-t p-4">
           <div className="mb-2 text-xs text-gray-500">Signed in as</div>
