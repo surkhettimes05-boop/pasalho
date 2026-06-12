@@ -22,6 +22,11 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       const result = await authApi.login({ login, password });
+      // Store both tokens immediately so the interceptor can refresh
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('pasalo_token', result.accessToken);
+        localStorage.setItem('pasalo_refresh_token', result.refreshToken);
+      }
       const me = await authApi.me();
       setSession(result.accessToken, me);
       router.replace('/dashboard');

@@ -133,7 +133,9 @@ export default function ProductsPage() {
                       )}
                     </TD>
                     <TD>
-                      <Badge variant={statusVariant(p.status)}>{p.status}</Badge>
+                      <Badge variant={statusVariant(p.isActive !== false ? 'ACTIVE' : 'INACTIVE')}>
+                        {p.isActive !== false ? 'ACTIVE' : 'INACTIVE'}
+                      </Badge>
                     </TD>
                     <TD className="text-right">
                       <Button

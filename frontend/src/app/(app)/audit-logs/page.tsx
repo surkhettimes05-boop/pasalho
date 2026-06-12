@@ -24,10 +24,10 @@ const ACTIONS = [
 ];
 
 const actionVariant = (action: string) => {
-  if (action.includes('FAILURE') || action.includes('VOID') || action.includes('CANCEL')) return 'danger';
-  if (action.includes('LOGIN_SUCCESS')) return 'success';
-  if (action.includes('POSTED') || action.includes('APPROVED')) return 'success';
-  return 'default';
+  if (action.includes('FAILURE') || action.includes('VOID') || action.includes('CANCEL')) return 'red';
+  if (action.includes('LOGIN_SUCCESS')) return 'green';
+  if (action.includes('POSTED') || action.includes('APPROVED')) return 'green';
+  return 'gray';
 };
 
 export default function AuditLogsPage() {

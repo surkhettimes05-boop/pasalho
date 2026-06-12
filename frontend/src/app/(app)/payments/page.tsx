@@ -85,14 +85,14 @@ export default function PaymentsPage() {
                     <TD className="text-xs text-slate-500">{formatDateTime(p.receivedAt ?? p.createdAt)}</TD>
                     <TD className="font-medium text-slate-900">{p.retailer?.shopName ?? '—'}</TD>
                     <TD>
-                      <Badge variant="default">{p.method}</Badge>
+                      <Badge variant="blue">{p.method}</Badge>
                     </TD>
                     <TD className="text-right tabular-nums font-semibold text-green-700">
                       {formatCurrency(p.amount)}
                     </TD>
                     <TD className="font-mono text-xs text-slate-500">{p.referenceNumber ?? '—'}</TD>
                     <TD>
-                      <Badge variant={p.status === 'VOIDED' ? 'danger' : 'success'}>{p.status}</Badge>
+                      <Badge variant={p.status === 'VOIDED' ? 'red' : 'green'}>{p.status}</Badge>
                     </TD>
                   </TR>
                 ))}

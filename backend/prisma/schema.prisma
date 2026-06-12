@@ -210,24 +210,29 @@ model User {
   retailerLedgerEntries     RetailerLedgerEntry[] @relation("RetailerLedgerCreator")
   financialLedgerEntries    FinancialLedgerEntry[] @relation("FinancialLedgerCreator")
 
+  passwordResetTokens     PasswordResetToken[]
+
   @@index([status])
   @@index([defaultBranchId])
 }
 
 model Session {
-  id           String   @id @default(uuid())
-  userId       String
-  tokenHash    String   @unique
-  expiresAt    DateTime
-  userAgent    String?
-  ipAddress    String?
-  createdAt    DateTime @default(now())
-  revokedAt    DateTime?
+  id                String   @id @default(uuid())
+  userId            String
+  tokenHash         String?
+  refreshTokenHash  String?
+  refreshExpiresAt  DateTime?
+  expiresAt         DateTime
+  userAgent         String?
+  ipAddress         String?
+  createdAt         DateTime @default(now())
+  revokedAt         DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([expiresAt])
+  @@index([refreshTokenHash])
 }
 
 model LoginAttempt {

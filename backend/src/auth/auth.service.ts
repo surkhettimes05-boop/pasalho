@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
+import { randomBytes } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import { AuditLogService } from '../audit/audit-log.service';
 import { LoginDto } from './dto/login.dto';
@@ -101,51 +102,148 @@ export class AuthService {
     }
     const permissions = Array.from(permissionsSet);
 
-    // Create session (tokenHash populated after signing)
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
+    return this.createSession(user.id, user.email, roles, permissions, ipAddress, userAgent);
+  }
+
+  /** Create session with access + refresh tokens */
+  private async createSession(
+    userId: string,
+    email: string,
+    roles: string[],
+    permissions: string[],
+    ipAddress?: string,
+    userAgent?: string,
+  ) {
+    // Generate refresh token (opaque random bytes, stored as bcrypt hash)
+    const refreshToken = randomBytes(48).toString('hex');
+    const refreshTokenHash = await bcrypt.hash(refreshToken, 4);
+
+    // Access token expires in 15 min (from JWT config)
+    const accessExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+    // Refresh token expires in 7 days
+    const refreshExpiresAt = new Date();
+    refreshExpiresAt.setDate(refreshExpiresAt.getDate() + 7);
 
     const session = await this.prisma.session.create({
-      data: { userId: user.id, tokenHash: '', expiresAt, ipAddress, userAgent },
+      data: {
+        userId,
+        tokenHash: '',
+        refreshTokenHash,
+        refreshExpiresAt,
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // session max lifetime 30 days
+        ipAddress,
+        userAgent,
+      },
     });
 
     const payload: JwtPayload = {
-      sub: user.id,
-      email: user.email,
+      sub: userId,
+      email,
       sessionId: session.id,
       roles,
       permissions,
     };
     const accessToken = this.jwt.sign(payload);
 
-    // Store a hash of the token in the session for revocation checks
+    // Store hash of access token in session for revocation checks
     const tokenHash = await bcrypt.hash(accessToken, 4);
     await this.prisma.session.update({ where: { id: session.id }, data: { tokenHash } });
 
     // Record success
     await this.prisma.loginAttempt.create({
-      data: { userId: user.id, email: user.email, success: true, ipAddress, userAgent },
+      data: { userId, email, success: true, ipAddress, userAgent },
     });
 
     await this.audit.record({
-      actorUserId: user.id,
+      actorUserId: userId,
       action: 'LOGIN_SUCCESS',
       entityType: 'AUTH',
-      entityId: user.id,
+      entityId: userId,
       ipAddress,
       userAgent,
     });
 
     await this.prisma.user.update({
-      where: { id: user.id },
+      where: { id: userId },
       data: { lastLoginAt: new Date() },
     });
 
     return {
       accessToken,
-      userId: user.id,
+      refreshToken,
+      userId,
       permissions,
     };
+  }
+
+  /**
+   * Refresh: validate refresh token, revoke old session, issue new one.
+   */
+  async refresh(refreshToken: string, ipAddress?: string, userAgent?: string) {
+    // Find all non-revoked sessions with non-null refreshTokenHash
+    const sessions = await this.prisma.session.findMany({
+      where: {
+        revokedAt: null,
+        refreshTokenHash: { not: null },
+        refreshExpiresAt: { gt: new Date() },
+      },
+      include: { user: true },
+    });
+
+    let matchedSession: (typeof sessions)[0] | null = null;
+
+    for (const session of sessions) {
+      if (session.refreshTokenHash) {
+        const valid = await bcrypt.compare(refreshToken, session.refreshTokenHash);
+        if (valid) {
+          matchedSession = session;
+          break;
+        }
+      }
+    }
+
+    if (!matchedSession) {
+      throw new AppError(ErrorCodes.AUTH_REQUIRED, 'Invalid or expired refresh token.', 401);
+    }
+
+    const user = matchedSession.user;
+
+    if (user.status !== 'ACTIVE') {
+      throw new AppError(ErrorCodes.FORBIDDEN, 'Account suspended.', 403);
+    }
+
+    // Revoke old session
+    await this.prisma.session.update({
+      where: { id: matchedSession.id },
+      data: { revokedAt: new Date() },
+    });
+
+    // Collect roles and permissions from current DB state
+    const userWithRoles = await this.prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+      include: {
+        userRoles: {
+          include: {
+            role: {
+              include: { permissions: { include: { permission: true } } },
+            },
+          },
+        },
+      },
+    });
+
+    const roles = userWithRoles.userRoles.map((ur) => ur.role.code);
+    const permissionsSet = new Set<string>();
+    for (const ur of userWithRoles.userRoles) {
+      for (const rp of ur.role.permissions) {
+        permissionsSet.add(rp.permission.code);
+      }
+    }
+    const permissions = Array.from(permissionsSet);
+
+    // Create new session with fresh tokens
+    return this.createSession(user.id, user.email, roles, permissions, ipAddress, userAgent);
   }
 
   async logout(sessionId: string) {

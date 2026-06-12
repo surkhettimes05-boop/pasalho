@@ -25,6 +25,7 @@ export interface UserMe {
 
 export interface LoginResponse {
   accessToken: string;
+  refreshToken: string;
   userId: string;
   permissions: string[];
 }
@@ -32,6 +33,9 @@ export interface LoginResponse {
 export const authApi = {
   async login(credentials: LoginCredentials): Promise<LoginResponse> {
     return api.post('/auth/login', credentials);
+  },
+  async refresh(refreshToken: string): Promise<LoginResponse> {
+    return api.post('/auth/refresh', { refreshToken });
   },
   async me(): Promise<UserMe> {
     return api.get('/auth/me');

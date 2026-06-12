@@ -11,9 +11,10 @@ export interface Product {
   defaultUnit?: { id: string; name: string; symbol: string };
   isBatchTracked: boolean;
   isExpiryTracked: boolean;
+  isActive?: boolean;
   costPrice?: number | string;
   mrp?: number | string;
-  status: 'ACTIVE' | 'INACTIVE';
+  status?: 'ACTIVE' | 'INACTIVE'; // derived display field
 }
 
 export interface Category {

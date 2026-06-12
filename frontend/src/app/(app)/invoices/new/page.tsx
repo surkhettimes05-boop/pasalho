@@ -11,6 +11,7 @@ import { Select } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table';
 import { Modal } from '../_components/Modal';
+import { BatchSelect } from '../_components/ProductBatches';
 import { BarcodeScanner } from '@/components/barcode-scanner';
 import { catalogApi, Product } from '@/lib/api/catalog';
 import { organizationApi, Warehouse } from '@/lib/api/organization';
@@ -24,9 +25,10 @@ type LineItem = InvoiceItemInput & {
   productSku: string;
   unitSymbol: string;
   isBatchTracked: boolean;
+  rowKey: string;
 };
 
-const EMPTY_ITEM: Omit<LineItem, 'productName' | 'productSku' | 'unitSymbol' | 'isBatchTracked'> = {
+const EMPTY_ITEM: Omit<LineItem, 'productName' | 'productSku' | 'unitSymbol' | 'isBatchTracked' | 'rowKey'> = {
   productId: '',
   unitId: '',
   quantity: 1,
@@ -84,7 +86,8 @@ export default function NewInvoicePage() {
       productName: p.name,
       productSku: p.skuCode,
       unitSymbol: p.defaultUnit?.symbol ?? '',
-      isBatchTracked: p.isBatchTracked,
+      isBatchTracked: !!p.isBatchTracked,
+      rowKey: p.id + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
     };
     setItems((prev) => [...prev, newItem]);
     setProductSearch('');
@@ -102,19 +105,35 @@ export default function NewInvoicePage() {
     () => items.reduce((s, it) => s + (it.quantity || 0) * (it.unitPrice || 0), 0),
     [items],
   );
-  const taxEstimate = useMemo(() => subtotal * 0.13, [subtotal]);
-  const grandTotal = useMemo(() => subtotal + taxEstimate, [subtotal, taxEstimate]);
+  const discountTotal = useMemo(
+    () => items.reduce((s, it) => s + (it.discountAmount ? Number(it.discountAmount) : 0), 0),
+    [items],
+  );
+  const taxTotal = useMemo(
+    () => items.reduce((s, it) => s + (it.taxAmount ? Number(it.taxAmount) : 0), 0),
+    [items],
+  );
+  const grandTotal = useMemo(
+    () => Math.max(0, subtotal - discountTotal + taxTotal),
+    [subtotal, discountTotal, taxTotal],
+  );
 
   const branchId = selectedWarehouse?.branchId;
-  const canSave = items.length > 0 && !!warehouseId && !!branchId;
+  const canSave =
+    items.length > 0 &&
+    !!warehouseId &&
+    !!branchId &&
+    !!selectedWarehouse?.inventoryLocation?.id &&
+    items.every((it) => !it.isBatchTracked || !!it.batchId);
 
   const buildPayload = (): any | null => {
     if (!selectedWarehouse) return null;
-    // Backend may need sourceLocationId; if not present on warehouse, fall back to warehouseId.
+    const locationId = selectedWarehouse.inventoryLocation?.id;
+    if (!locationId) return null;
     return {
       branchId: selectedWarehouse.branchId,
       warehouseId: selectedWarehouse.id,
-      sourceLocationId: (selectedWarehouse as any).inventoryLocation?.id ?? selectedWarehouse.id,
+      sourceLocationId: locationId,
       retailerId: retailerId || undefined,
       items: items.map((it) => ({
         productId: it.productId,
@@ -265,8 +284,10 @@ export default function NewInvoicePage() {
               ) : (
                 <Table>
                   <THead>
-                    <TR>
+                                          <TR>
                       <TH>Product</TH>
+                      <TH>Batch</TH>
+                      <TH>Unit</TH>
                       <TH className="text-right">Qty</TH>
                       <TH className="text-right">Unit Price</TH>
                       <TH className="text-right">Line Total</TH>
@@ -275,13 +296,20 @@ export default function NewInvoicePage() {
                   </THead>
                   <TBody>
                     {items.map((it, idx) => (
-                      <TR key={idx}>
+                      <TR key={it.rowKey}>
                         <TD>
                           <div className="font-medium text-slate-900">{it.productName}</div>
-                          <div className="font-mono text-xs text-slate-500">
-                            {it.productSku} · {it.unitSymbol}
-                          </div>
+                          <div className="font-mono text-xs text-slate-500">{it.productSku}</div>
                         </TD>
+                        <TD>
+                          <BatchSelect
+                            productId={it.productId}
+                            isBatchTracked={it.isBatchTracked}
+                            value={it.batchId}
+                            onChange={(id) => updateItem(idx, { batchId: id })}
+                          />
+                        </TD>
+                        <TD className="text-xs text-slate-600">{it.unitSymbol || '—'}</TD>
                         <TD className="text-right">
                           <Input
                             type="number"
@@ -362,14 +390,24 @@ export default function NewInvoicePage() {
                   <span className="tabular-nums">{formatCurrency(subtotal)}</span>
                 </div>
                 <div className="flex justify-between text-slate-500">
-                  <span>Tax (est. 13%)</span>
-                  <span className="tabular-nums">{formatCurrency(taxEstimate)}</span>
+                  <span>Discount</span>
+                  <span className="tabular-nums">- {formatCurrency(discountTotal)}</span>
+                </div>
+                <div className="flex justify-between text-slate-500">
+                  <span>Tax</span>
+                  <span className="tabular-nums">{formatCurrency(taxTotal)}</span>
                 </div>
                 <div className="flex justify-between border-t border-slate-200 pt-2 text-base font-bold">
                   <span>Grand total</span>
                   <span className="tabular-nums">{formatCurrency(grandTotal)}</span>
                 </div>
               </div>
+
+              {!canSave && items.some((it) => it.isBatchTracked && !it.batchId) ? (
+                <p className="text-xs text-amber-600">
+                  Select a batch for every batch-tracked item before saving.
+                </p>
+              ) : null}
 
               <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
                 <Button

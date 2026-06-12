@@ -16,6 +16,8 @@ export interface Warehouse {
   code: string;
   name: string;
   status: 'ACTIVE' | 'INACTIVE';
+  branch?: { id: string; name: string };
+  inventoryLocation?: { id: string; code: string; name: string };
 }
 
 export const organizationApi = {

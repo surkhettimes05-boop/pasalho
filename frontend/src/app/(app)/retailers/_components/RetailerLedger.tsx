@@ -69,7 +69,7 @@ export function RetailerLedger({ retailer, open, onClose }: Props) {
                   <TR key={e.id}>
                     <TD className="text-xs text-slate-500">{formatDate(e.createdAt)}</TD>
                     <TD>
-                      <Badge variant={e.entryType === 'INVOICE_DEBIT' ? 'danger' : 'success'}>
+                      <Badge variant={e.entryType === 'INVOICE_DEBIT' ? 'red' : 'green'}>
                         {e.entryType.replace('_', ' ')}
                       </Badge>
                     </TD>

@@ -80,15 +80,32 @@ export default function NewAdjustmentPage() {
 
   const createMut = useMutation({
     mutationFn: async () => {
-      const body: any = {
+      // Look up the warehouse to get branchId and locationId
+      const whDetail: any = await api.get(`/warehouses/${warehouseId}`);
+      const branchId = whDetail?.branchId;
+      const locationId = whDetail?.inventoryLocation?.id;
+      if (!locationId) throw new Error('Warehouse has no inventory location. Create the warehouse properly first.');
+
+      const qty = Number(quantityDelta);
+      const body = {
+        branchId,
         warehouseId,
-        productId,
-        unitId,
-        quantityDelta: Number(quantityDelta),
-        reasonCode,
+        locationId,
+        reason: REASONS.find((r) => r.value === reasonCode)?.label ?? reasonCode,
+        notes: notes.trim() || undefined,
+        items: [
+          {
+            productId,
+            batchId: batchId || undefined,
+            unitId,
+            stockState: 'AVAILABLE',
+            quantityDelta: qty,
+            baseQuantityDelta: qty,
+            reasonCode,
+            notes: notes.trim() || undefined,
+          },
+        ],
       };
-      if (batchId) body.batchId = batchId;
-      if (notes.trim()) body.notes = notes.trim();
       return api.post('/inventory/adjustments', body);
     },
     onSuccess: () => {

@@ -54,6 +54,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <NavItem href="/invoices" label="Invoices" />
           <NavItem href="/payments" label="Payments" />
           <NavItem href="/retailers" label="Retailers" />
+          <NavItem href="/sales-reps" label="Sales Reps" />
 
           <div className="mb-1 mt-4 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Admin</div>
           <NavItem href="/audit-logs" label="Audit Logs" />
