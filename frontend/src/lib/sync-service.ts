@@ -16,7 +16,7 @@ export class SyncService {
         await db.products.bulkAdd(products.items.map(p => ({
           id: p.id,
           skuCode: p.skuCode,
-          barcode: p.barcode,
+          barcode: p.barcode ?? null,
           name: p.name,
           mrp: Number(p.mrp),
           categoryId: p.categoryId,
@@ -66,7 +66,7 @@ export class SyncService {
         } catch (error: any) {
           console.error(`Failed to sync item ${item.id}:`, error);
           await db.syncQueue.update(item.id!, {
-            status: 'PENDING', // retry later
+            status: 'PENDING',
             error: error.message,
             retryCount: (item.retryCount || 0) + 1,
           });
@@ -85,7 +85,6 @@ export class SyncService {
       status: 'PENDING',
       retryCount: 0,
     });
-    // Trigger processing attempt
     this.processQueue();
   }
 }
