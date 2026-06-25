@@ -20,7 +20,7 @@ export class SyncService {
           name: p.name,
           mrp: Number(p.mrp),
           categoryId: p.categoryId,
-          brandId: p.brandId,
+          brandId: p.brandId ?? null,
           defaultUnitId: p.defaultUnitId,
           defaultUnitSymbol: p.defaultUnit?.symbol || '',
           isBatchTracked: !!p.isBatchTracked,

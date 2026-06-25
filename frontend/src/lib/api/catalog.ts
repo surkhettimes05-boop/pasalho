@@ -6,6 +6,7 @@ export interface Product {
   name: string;
   barcode?: string;
   categoryId: string;
+  brandId?: string | null;
   category?: { id: string; name: string; code: string };
   defaultUnitId: string;
   defaultUnit?: { id: string; name: string; symbol: string };

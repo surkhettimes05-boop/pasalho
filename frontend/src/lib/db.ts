@@ -7,7 +7,7 @@ export interface LocalProduct {
   name: string;
   mrp: number;
   categoryId: string;
-  brandId: string;
+  brandId: string | null;
   defaultUnitId: string;
   defaultUnitSymbol: string;
   isBatchTracked: boolean;
