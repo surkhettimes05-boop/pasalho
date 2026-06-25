@@ -1,7 +1,6 @@
 {
   "experimentalServices": {
     "frontend": {
-      "path": "./frontend",
       "framework": "nextjs"
     }
   }
