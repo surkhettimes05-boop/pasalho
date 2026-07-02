@@ -9,10 +9,15 @@ function getToken(): string | null {
   return localStorage.getItem(RETAILER_TOKEN_KEY);
 }
 
+import { handleMockRequest } from './demo-mock-data';
+
+const IS_DEMO = process.env.NEXT_PUBLIC_DEMO_MODE !== 'false';
+
 export const retailerApi = axios.create({
   baseURL: API_URL,
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
+  adapter: IS_DEMO ? (handleMockRequest as any) : undefined,
 });
 
 retailerApi.interceptors.request.use((config) => {

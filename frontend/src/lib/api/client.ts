@@ -31,10 +31,15 @@ function clearTokens() {
   localStorage.removeItem(REFRESH_TOKEN_KEY);
 }
 
+import { handleMockRequest } from './demo-mock-data';
+
+const IS_DEMO = process.env.NEXT_PUBLIC_DEMO_MODE !== 'false';
+
 export const api: AxiosInstance = axios.create({
   baseURL: API_URL,
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
+  adapter: IS_DEMO ? (handleMockRequest as any) : undefined,
 });
 
 // Request interceptor: attach JWT
