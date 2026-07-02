@@ -1,0 +1,37 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Rep {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+  sessions  Session[]
+  orders    Order[]
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  repId     String
+  rep       Rep      @relation(fields: [repId], references: [id])
+  messages  Json     @default("[]")
+  createdAt DateTime @default(now())
+  orders    Order[]
+}
+
+model Order {
+  id        String   @id @default(uuid())
+  repId     String
+  rep       Rep      @relation(fields: [repId], references: [id])
+  sessionId String
+  session   Session  @relation(fields: [sessionId], references: [id])
+  shopName  String
+  items     Json
+  status    String   @default("PENDING")
+  createdAt DateTime @default(now())
+}

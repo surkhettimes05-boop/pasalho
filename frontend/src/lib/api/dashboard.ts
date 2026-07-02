@@ -1,19 +1,46 @@
 import { api } from './client';
 
+export interface TodaySummary {
+  invoiceCount: number;
+  invoiceSalesTotal: number;
+  paymentCount: number;
+  paymentsTotal: number;
+}
+
+export interface OutstandingSummary {
+  totalRetailerCredit: number;
+}
+
+export interface RecentInvoice {
+  id: string;
+  invoiceNumber: string;
+  grandTotal: number;
+  status: string;
+  createdAt: string;
+  retailer: { shopName: string };
+}
+
+export interface RecentMovement {
+  id: string;
+  movementType: string;
+  quantity: number;
+  occurredAt: string;
+  product: { name: string };
+  location: { name: string };
+}
+
 export interface DashboardSummary {
-  todaySales?: number | string;
-  pendingInvoices?: number;
-  lowStockItems?: number;
-  activeRetailers?: number;
+  today: TodaySummary;
+  outstanding: OutstandingSummary;
+  lowStockCount: number;
+  recentInvoices: RecentInvoice[];
+  recentMovements: RecentMovement[];
 }
 
 export const dashboardApi = {
-  async get(): Promise<DashboardSummary> {
-    try {
-      return await api.get('/dashboard');
-    } catch {
-      // Return placeholder when endpoint missing or not yet implemented
-      return {};
-    }
+  async get(branchId?: string): Promise<DashboardSummary> {
+    const params = branchId ? `?branchId=${branchId}` : '';
+    const res = (await api.get(`/dashboard/admin-summary${params}`)) as unknown as DashboardSummary;
+    return res;
   },
 };

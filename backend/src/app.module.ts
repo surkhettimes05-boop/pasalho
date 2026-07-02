@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { AuditInterceptor } from './audit/audit.interceptor';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './auth/auth.module';
 import { IdentityModule } from './identity/identity.module';
@@ -13,6 +15,11 @@ import { CommonModule } from './common/common.module';
 import { AuditModule } from './audit/audit.module';
 import { HealthModule } from './health/health.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { RouteModule } from './routes/route.module';
+import { SalesOrdersModule } from './sales-orders/sales-orders.module';
+import { DeliveryModule } from './deliveries/delivery.module';
+import { NotificationModule } from './notifications/notification.module';
+import { RetailerPortalModule } from './retailer-portal/retailer-portal.module';
 import { appConfigSchema } from './config/app.config';
 
 @Module({
@@ -51,8 +58,22 @@ import { appConfigSchema } from './config/app.config';
     AuditModule,
     HealthModule,
     DashboardModule,
+    RouteModule,
+    SalesOrdersModule,
+    DeliveryModule,
+    NotificationModule,
+    RetailerPortalModule,
   ],
   controllers: [],
-  providers: [],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: AuditInterceptor,
+    },
+  ],
 })
 export class AppModule {}

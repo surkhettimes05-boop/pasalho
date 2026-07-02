@@ -12,6 +12,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table';
 import { Badge, statusVariant } from '@/components/ui/badge';
 import { Modal } from '../_components/Modal';
+import { Receipt } from '@/components/receipt';
 import { salesApi, Invoice } from '@/lib/api/sales';
 import { api } from '@/lib/api/client';
 import { toast } from '@/components/ui/toaster';
@@ -77,135 +78,144 @@ export default function InvoiceDetailPage() {
   const canVoid = ['POSTED', 'CREDIT_OPEN', 'PARTIALLY_PAID'].includes(inv.status);
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-slate-900">
-              {inv.invoiceNumber ?? inv.id.slice(0, 8)}
-            </h1>
-            <Badge variant={statusVariant(inv.status)}>{inv.status}</Badge>
+    <>
+      <div className="no-print space-y-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-bold text-slate-900">
+                {inv.invoiceNumber ?? inv.id.slice(0, 8)}
+              </h1>
+              <Badge variant={statusVariant(inv.status)}>{inv.status}</Badge>
+            </div>
+            <p className="mt-1 text-sm text-slate-500">
+              {inv.retailer?.shopName ?? 'Walk-in / cash'} · {formatDateTime(inv.createdAt)}
+            </p>
           </div>
-          <p className="mt-1 text-sm text-slate-500">
-            {inv.retailer?.shopName ?? 'Walk-in / cash'} · {formatDateTime(inv.createdAt)}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Link href="/invoices">
-            <Button variant="outline">Back</Button>
-          </Link>
-          {canPost ? (
-            <Button onClick={() => postMut.mutate()} disabled={postMut.isPending}>
-              {postMut.isPending ? <Spinner size="sm" /> : null} Post
+          <div className="flex flex-wrap gap-2">
+            <Link href="/invoices">
+              <Button variant="outline">Back</Button>
+            </Link>
+            {canPost ? (
+              <Button onClick={() => postMut.mutate()} disabled={postMut.isPending}>
+                {postMut.isPending ? <Spinner size="sm" /> : null} Post
+              </Button>
+            ) : null}
+            {canPay ? (
+              <Button onClick={() => setPayOpen(true)}>Record Payment</Button>
+            ) : null}
+            {canVoid ? (
+              <Button variant="outline" onClick={() => setVoidOpen(true)}>
+                Void
+              </Button>
+            ) : null}
+            <Button variant="outline" onClick={() => window.print()}>
+              Print Receipt
             </Button>
-          ) : null}
-          {canPay ? (
-            <Button onClick={() => setPayOpen(true)}>Record Payment</Button>
-          ) : null}
-          {canVoid ? (
-            <Button variant="outline" onClick={() => setVoidOpen(true)}>
-              Void
-            </Button>
-          ) : null}
+          </div>
         </div>
-      </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <Card>
+            <CardContent className="space-y-2 py-4">
+              <h2 className="text-sm font-semibold text-slate-700">Totals</h2>
+              <Row label="Subtotal" value={formatCurrency(inv.subtotal)} />
+              <Row label="Discount" value={formatCurrency(inv.discountTotal)} />
+              <Row label="Tax" value={formatCurrency(inv.taxTotal)} />
+              <Row label="Grand Total" value={formatCurrency(inv.grandTotal)} bold />
+              <Row label="Paid" value={formatCurrency(inv.paidAmount)} />
+              <Row label="Due" value={formatCurrency(inv.dueAmount)} bold accent />
+            </CardContent>
+          </Card>
+          <Card className="md:col-span-2">
+            <CardContent className="p-0">
+              <h2 className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
+                Line Items
+              </h2>
+              {inv.items && inv.items.length > 0 ? (
+                <Table>
+                  <THead>
+                    <TR>
+                      <TH>Product</TH>
+                      <TH className="text-right">Qty</TH>
+                      <TH className="text-right">Unit Price</TH>
+                      <TH className="text-right">Line Total</TH>
+                    </TR>
+                  </THead>
+                  <TBody>
+                    {inv.items.map((it: any, i: number) => (
+                      <TR key={i}>
+                        <TD className="font-medium">{it.product?.name ?? it.productName ?? it.productId}</TD>
+                        <TD className="text-right tabular-nums">{Number(it.quantity)}</TD>
+                        <TD className="text-right tabular-nums">{formatCurrency(it.unitPrice)}</TD>
+                        <TD className="text-right tabular-nums font-semibold">
+                          {formatCurrency(Number(it.quantity) * Number(it.unitPrice))}
+                        </TD>
+                      </TR>
+                    ))}
+                  </TBody>
+                </Table>
+              ) : (
+                <p className="px-4 py-6 text-sm text-slate-500">No items.</p>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
         <Card>
-          <CardContent className="space-y-2 py-4">
-            <h2 className="text-sm font-semibold text-slate-700">Totals</h2>
-            <Row label="Subtotal" value={formatCurrency(inv.subtotal)} />
-            <Row label="Discount" value={formatCurrency(inv.discountTotal)} />
-            <Row label="Tax" value={formatCurrency(inv.taxTotal)} />
-            <Row label="Grand Total" value={formatCurrency(inv.grandTotal)} bold />
-            <Row label="Paid" value={formatCurrency(inv.paidAmount)} />
-            <Row label="Due" value={formatCurrency(inv.dueAmount)} bold accent />
-          </CardContent>
-        </Card>
-        <Card className="md:col-span-2">
           <CardContent className="p-0">
             <h2 className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
-              Line Items
+              Payments
             </h2>
-            {inv.items && inv.items.length > 0 ? (
+            {inv.payments && inv.payments.length > 0 ? (
               <Table>
                 <THead>
                   <TR>
-                    <TH>Product</TH>
-                    <TH className="text-right">Qty</TH>
-                    <TH className="text-right">Unit Price</TH>
-                    <TH className="text-right">Line Total</TH>
+                    <TH>Date</TH>
+                    <TH>Method</TH>
+                    <TH className="text-right">Amount</TH>
+                    <TH>Reference</TH>
                   </TR>
                 </THead>
                 <TBody>
-                  {inv.items.map((it: any, i: number) => (
+                  {inv.payments.map((p: any, i: number) => (
                     <TR key={i}>
-                      <TD className="font-medium">{it.product?.name ?? it.productName ?? it.productId}</TD>
-                      <TD className="text-right tabular-nums">{Number(it.quantity)}</TD>
-                      <TD className="text-right tabular-nums">{formatCurrency(it.unitPrice)}</TD>
-                      <TD className="text-right tabular-nums font-semibold">
-                        {formatCurrency(Number(it.quantity) * Number(it.unitPrice))}
-                      </TD>
+                      <TD className="text-xs text-slate-500">{formatDateTime(p.createdAt)}</TD>
+                      <TD>{p.paymentMethod}</TD>
+                      <TD className="text-right tabular-nums">{formatCurrency(p.amount)}</TD>
+                      <TD className="font-mono text-xs text-slate-500">{p.reference ?? '—'}</TD>
                     </TR>
                   ))}
                 </TBody>
               </Table>
             ) : (
-              <p className="px-4 py-6 text-sm text-slate-500">No items.</p>
+              <p className="px-4 py-6 text-sm text-slate-500">No payments recorded.</p>
             )}
           </CardContent>
         </Card>
+
+        <PaymentModal
+          open={payOpen}
+          onClose={() => setPayOpen(false)}
+          invoiceId={id!}
+          defaultAmount={Number(inv.dueAmount ?? inv.grandTotal) || 0}
+          onSuccess={() => {
+            qc.invalidateQueries({ queryKey: ['invoice', id] });
+            setPayOpen(false);
+          }}
+        />
+        <VoidModal
+          open={voidOpen}
+          onClose={() => setVoidOpen(false)}
+          onSubmit={(reason) => voidMut.mutate(reason)}
+          submitting={voidMut.isPending}
+        />
       </div>
 
-      <Card>
-        <CardContent className="p-0">
-          <h2 className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
-            Payments
-          </h2>
-          {inv.payments && inv.payments.length > 0 ? (
-            <Table>
-              <THead>
-                <TR>
-                  <TH>Date</TH>
-                  <TH>Method</TH>
-                  <TH className="text-right">Amount</TH>
-                  <TH>Reference</TH>
-                </TR>
-              </THead>
-              <TBody>
-                {inv.payments.map((p: any, i: number) => (
-                  <TR key={i}>
-                    <TD className="text-xs text-slate-500">{formatDateTime(p.createdAt)}</TD>
-                    <TD>{p.paymentMethod}</TD>
-                    <TD className="text-right tabular-nums">{formatCurrency(p.amount)}</TD>
-                    <TD className="font-mono text-xs text-slate-500">{p.reference ?? '—'}</TD>
-                  </TR>
-                ))}
-              </TBody>
-            </Table>
-          ) : (
-            <p className="px-4 py-6 text-sm text-slate-500">No payments recorded.</p>
-          )}
-        </CardContent>
-      </Card>
-
-      <PaymentModal
-        open={payOpen}
-        onClose={() => setPayOpen(false)}
-        invoiceId={id!}
-        defaultAmount={Number(inv.dueAmount ?? inv.grandTotal) || 0}
-        onSuccess={() => {
-          qc.invalidateQueries({ queryKey: ['invoice', id] });
-          setPayOpen(false);
-        }}
-      />
-      <VoidModal
-        open={voidOpen}
-        onClose={() => setVoidOpen(false)}
-        onSubmit={(reason) => voidMut.mutate(reason)}
-        submitting={voidMut.isPending}
-      />
-    </div>
+      <div className="print-only">
+        <Receipt invoice={inv} />
+      </div>
+    </>
   );
 }
 

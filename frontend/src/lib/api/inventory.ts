@@ -152,3 +152,78 @@ export const inventoryApi = {
     return api.post(`/inventory/adjustments/${id}/post`, {});
   },
 };
+
+export type StockTransferStatus = 'DRAFT' | 'SHIPPED' | 'RECEIVED' | 'CANCELLED';
+
+export interface StockTransfer {
+  id: string;
+  transferNo: string;
+  fromBranchId: string;
+  fromBranch: { id: string; name: string };
+  fromWarehouseId: string;
+  fromWarehouse: { id: string; name: string; code: string };
+  fromLocationId: string;
+  fromLocation?: { id: string; name: string };
+  toBranchId: string;
+  toBranch: { id: string; name: string };
+  toWarehouseId: string;
+  toWarehouse: { id: string; name: string; code: string };
+  toLocationId: string;
+  toLocation?: { id: string; name: string };
+  status: StockTransferStatus;
+  notes?: string;
+  createdBy: { id: string; fullName: string };
+  shippedBy?: { id: string; fullName: string };
+  receivedBy?: { id: string; fullName: string };
+  shippedAt?: string;
+  receivedAt?: string;
+  items: StockTransferItem[];
+  createdAt: string;
+}
+
+export interface StockTransferItem {
+  id: string;
+  productId: string;
+  product: { id: string; name: string; skuCode: string };
+  batchId?: string;
+  batch?: { id: string; batchNumber: string };
+  unitId: string;
+  unit: { id: string; name: string; symbol: string };
+  quantity: number | string;
+  baseQuantity: number | string;
+  receivedQuantity?: number | string;
+  receivedBaseQuantity?: number | string;
+  varianceQuantity?: number | string;
+}
+
+export const transferApi = {
+  async list(params?: {
+    branchId?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<PaginatedResponse<StockTransfer>> {
+    const q = new URLSearchParams();
+    if (params?.branchId) q.set('branchId', params.branchId);
+    if (params?.page) q.set('page', String(params.page));
+    if (params?.limit) q.set('limit', String(params.limit));
+    return api.get(`/inventory/transfers?${q.toString()}`);
+  },
+
+  async findById(id: string): Promise<StockTransfer> {
+    return api.get(`/inventory/transfers/${id}`);
+  },
+
+  async create(
+    data: Record<string, unknown>,
+  ): Promise<StockTransfer> {
+    return api.post('/inventory/transfers', data);
+  },
+
+  async ship(id: string): Promise<StockTransfer> {
+    return api.post(`/inventory/transfers/${id}/ship`, {});
+  },
+
+  async receive(id: string): Promise<StockTransfer> {
+    return api.post(`/inventory/transfers/${id}/receive`, {});
+  },
+};

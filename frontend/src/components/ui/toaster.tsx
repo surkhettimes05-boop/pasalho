@@ -32,9 +32,16 @@ export const useToastStore = create<ToastStore>((set) => ({
   remove: (id) => set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) })),
 }));
 
-export function toast(args: { title: string; description?: string; variant?: ToastVariant }) {
+function showToast(args: { title: string; description?: string; variant?: ToastVariant }) {
   useToastStore.getState().push({ variant: 'default', ...args });
 }
+
+export const toast = Object.assign(showToast, {
+  success: (title: string, description?: string) =>
+    showToast({ title, description, variant: 'success' }),
+  error: (title: string, description?: string) =>
+    showToast({ title, description, variant: 'error' }),
+});
 
 export function Toaster() {
   const { toasts, remove } = useToastStore();

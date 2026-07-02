@@ -9,6 +9,7 @@ import { Select } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { Modal } from '@/components/ui/modal';
 import { api } from '@/lib/api/client';
 import { salesApi, Retailer } from '@/lib/api/sales';
 import { formatCurrency, formatDateTime } from '@/lib/utils/cn';
@@ -152,62 +153,57 @@ function CreatePaymentModal({ onClose, onSuccess }: { onClose: () => void; onSuc
   const selectedRetailer = retailersQ.data?.items.find((r) => r.id === form.retailerId);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md rounded-xl bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b px-6 py-4">
-          <h2 className="text-lg font-semibold">Record Payment</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl">×</button>
-        </div>
-        <div className="space-y-4 px-6 py-4">
-          <Select
-            label="Retailer"
-            value={form.retailerId}
-            onChange={(e) => setForm((f) => ({ ...f, retailerId: e.target.value }))}
-          >
-            <option value="">— Select retailer (optional) —</option>
-            {(retailersQ.data?.items ?? []).map((r: Retailer) => (
-              <option key={r.id} value={r.id}>{r.shopName} ({r.code})</option>
-            ))}
-          </Select>
-          <Input
-            label="Invoice ID (optional)"
-            placeholder="Leave blank for general payment"
-            value={form.invoiceId}
-            onChange={(e) => setForm((f) => ({ ...f, invoiceId: e.target.value }))}
-          />
-          <Input
-            label="Amount (NPR)"
-            type="number"
-            step="0.01"
-            min="0.01"
-            required
-            value={form.amount}
-            onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
-          />
-          <Select
-            label="Payment Method"
-            value={form.method}
-            onChange={(e) => setForm((f) => ({ ...f, method: e.target.value as any }))}
-          >
-            {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
-          </Select>
-          <Input
-            label="Reference (optional)"
-            placeholder="Cheque #, QR txn ID, bank ref..."
-            value={form.referenceNumber}
-            onChange={(e) => setForm((f) => ({ ...f, referenceNumber: e.target.value }))}
-          />
-        </div>
-        <div className="flex justify-end gap-2 border-t px-6 py-4">
-          <Button variant="outline" onClick={onClose} disabled={createMut.isPending}>Cancel</Button>
-          <Button
-            onClick={() => createMut.mutate()}
-            disabled={createMut.isPending || !form.amount || Number(form.amount) <= 0}
-          >
-            {createMut.isPending ? <Spinner size="sm" /> : null} Record
-          </Button>
-        </div>
+    <Modal open={true} onClose={onClose} title="Record Payment" footer={
+      <>
+        <Button variant="outline" onClick={onClose} disabled={createMut.isPending}>Cancel</Button>
+        <Button
+          onClick={() => createMut.mutate()}
+          disabled={createMut.isPending || !form.amount || Number(form.amount) <= 0}
+        >
+          {createMut.isPending ? <Spinner size="sm" /> : null} Record
+        </Button>
+      </>
+    }>
+      <div className="space-y-4">
+        <Select
+          label="Retailer"
+          value={form.retailerId}
+          onChange={(e) => setForm((f) => ({ ...f, retailerId: e.target.value }))}
+        >
+          <option value="">— Select retailer (optional) —</option>
+          {(retailersQ.data?.items ?? []).map((r: Retailer) => (
+            <option key={r.id} value={r.id}>{r.shopName} ({r.code})</option>
+          ))}
+        </Select>
+        <Input
+          label="Invoice ID (optional)"
+          placeholder="Leave blank for general payment"
+          value={form.invoiceId}
+          onChange={(e) => setForm((f) => ({ ...f, invoiceId: e.target.value }))}
+        />
+        <Input
+          label="Amount (NPR)"
+          type="number"
+          step="0.01"
+          min="0.01"
+          required
+          value={form.amount}
+          onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+        />
+        <Select
+          label="Payment Method"
+          value={form.method}
+          onChange={(e) => setForm((f) => ({ ...f, method: e.target.value as any }))}
+        >
+          {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+        </Select>
+        <Input
+          label="Reference (optional)"
+          placeholder="Cheque #, QR txn ID, bank ref..."
+          value={form.referenceNumber}
+          onChange={(e) => setForm((f) => ({ ...f, referenceNumber: e.target.value }))}
+        />
       </div>
-    </div>
+    </Modal>
   );
 }

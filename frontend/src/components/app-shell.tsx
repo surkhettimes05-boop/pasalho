@@ -1,64 +1,72 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
 import { useAuthStore } from '@/lib/stores/auth-store';
 import { authApi } from '@/lib/api/auth';
+import { SyncService } from '@/lib/sync-service';
 import { Button } from '@/components/ui/button';
 
-/**
- * Top-level app shell: sidebar + main content.
- * Used inside the protected route group (app)/.
- */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { user, clear } = useAuthStore();
 
+  // Start background sync once user is confirmed
   useEffect(() => {
-    if (!user) {
-      router.replace('/login');
-    }
-  }, [user, router]);
+    if (!user) return;
+    SyncService.syncCatalog();
+    const interval = setInterval(() => SyncService.processQueue(), 30_000);
+    return () => clearInterval(interval);
+  }, [user]);
 
   async function handleLogout() {
-    try {
-      await authApi.logout();
-    } catch {
-      // best-effort: clear local even if server fails
-    }
+    try { await authApi.logout(); } catch { /* best-effort */ }
     clear();
     router.replace('/login');
   }
 
   return (
     <div className="flex min-h-screen bg-gray-50">
-      <aside className="hidden w-60 flex-col border-r bg-white md:flex">
+      <aside className="no-print hidden w-60 flex-col border-r bg-white md:flex">
         <div className="flex h-16 items-center border-b px-6">
           <span className="text-lg font-bold text-blue-600">PASALO OS</span>
         </div>
+
         <nav className="flex-1 overflow-y-auto px-3 py-4 text-sm">
-          <div className="mb-1 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Overview</div>
+          <SectionLabel>Overview</SectionLabel>
           <NavItem href="/dashboard" label="Dashboard" />
 
-          <div className="mb-1 mt-4 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Organisation</div>
-          <NavItem href="/branches" label="Branches" />
+          <SectionLabel>Organisation</SectionLabel>
+          <NavItem href="/branches"   label="Branches" />
           <NavItem href="/warehouses" label="Warehouses" />
 
-          <div className="mb-1 mt-4 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Catalog & Stock</div>
-          <NavItem href="/products" label="Products" />
-          <NavItem href="/stock" label="Stock" />
-          <NavItem href="/stock/adjustments" label="Adjustments" />
+          <SectionLabel>Catalog &amp; Stock</SectionLabel>
+          <NavItem href="/products"           label="Products" />
+          <NavItem href="/stock"              label="Stock" />
+          <NavItem href="/stock/adjustments"  label="Adjustments" />
+          <NavItem href="/stock/counts"       label="Stock Counts" />
+          <NavItem href="/stock/damage"       label="Damage Reports" />
+          <NavItem href="/stock/expiry"       label="Expiry Dashboard" />
+          <NavItem href="/transfers"          label="Transfers" />
 
-          <div className="mb-1 mt-4 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Sales & Finance</div>
+          <SectionLabel>Sales &amp; Finance</SectionLabel>
           <NavItem href="/invoices/new" label="New Invoice (POS)" />
-          <NavItem href="/invoices" label="Invoices" />
-          <NavItem href="/payments" label="Payments" />
-          <NavItem href="/retailers" label="Retailers" />
-          <NavItem href="/sales-reps" label="Sales Reps" />
+          <NavItem href="/invoices"     label="Invoices" />
+          <NavItem href="/payments"     label="Payments" />
+          <NavItem href="/retailers"    label="Retailers" />
+          <NavItem href="/sales-reps"   label="Sales Reps" />
 
-          <div className="mb-1 mt-4 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Admin</div>
-          <NavItem href="/audit-logs" label="Audit Logs" />
+          <SectionLabel>Field Operations</SectionLabel>
+          <NavItem href="/routes"       label="Routes" />
+          <NavItem href="/orders"       label="Sales Orders" />
+          <NavItem href="/deliveries"   label="Deliveries" />
+
+          <SectionLabel>Admin</SectionLabel>
+          <NavItem href="/notifications" label="Notifications" />
+          <NavItem href="/audit-logs"    label="Audit Logs" />
         </nav>
+
         <div className="border-t p-4">
           <div className="mb-2 text-xs text-gray-500">Signed in as</div>
           <div className="mb-1 truncate text-sm font-medium">{user?.fullName ?? '—'}</div>
@@ -76,13 +84,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function NavItem({ href, label }: { href: string; label: string }) {
+function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <a
+    <div className="mb-1 mt-4 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+      {children}
+    </div>
+  );
+}
+
+function NavItem({ href, label }: { href: string; label: string }) {
+  const pathname = usePathname();
+  const active = pathname === href || (href !== '/dashboard' && pathname?.startsWith(href));
+  return (
+    <Link
       href={href}
-      className="block rounded-md px-3 py-2 text-gray-700 hover:bg-gray-100 hover:text-gray-900"
+      className={`block rounded-md px-3 py-2 hover:bg-gray-100 hover:text-gray-900 ${
+        active ? 'bg-blue-50 font-semibold text-blue-700' : 'text-gray-700'
+      }`}
     >
       {label}
-    </a>
+    </Link>
   );
 }

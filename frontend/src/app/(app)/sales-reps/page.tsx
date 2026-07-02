@@ -9,6 +9,7 @@ import { Select } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table';
 import { Badge, statusVariant } from '@/components/ui/badge';
+import { Modal } from '@/components/ui/modal';
 import { api } from '@/lib/api/client';
 import { organizationApi } from '@/lib/api/organization';
 import { toast } from '@/components/ui/toaster';
@@ -130,53 +131,48 @@ function SalesRepForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: 
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md rounded-xl bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b px-6 py-4">
-          <h2 className="text-lg font-semibold">New Sales Rep</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl">×</button>
-        </div>
-        <div className="space-y-4 px-6 py-4">
-          <Select
-            label="User"
-            value={form.userId}
-            onChange={(e) => setForm((f) => ({ ...f, userId: e.target.value }))}
-            required
-          >
-            <option value="">Select user</option>
-            {(usersQ.data?.items ?? []).map((u: any) => (
-              <option key={u.id} value={u.id}>{u.fullName} ({u.email})</option>
-            ))}
-          </Select>
-          <Select
-            label="Branch"
-            value={form.branchId}
-            onChange={(e) => setForm((f) => ({ ...f, branchId: e.target.value }))}
-            required
-          >
-            <option value="">Select branch</option>
-            {(branchesQ.data?.items ?? []).map((b) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
-            ))}
-          </Select>
-          <Input
-            label="Employee Code"
-            value={form.employeeCode}
-            onChange={(e) => setForm((f) => ({ ...f, employeeCode: e.target.value }))}
-            placeholder="EMP-001"
-            required
-          />
-        </div>
-        <div className="flex justify-end gap-2 border-t px-6 py-4">
-          <Button variant="outline" onClick={onClose} disabled={createMut.isPending}>Cancel</Button>
-          <Button
-            onClick={() => createMut.mutate()}
-            disabled={createMut.isPending || !form.userId || !form.branchId || !form.employeeCode}
-          >
-            {createMut.isPending ? <Spinner size="sm" /> : null} Create
-          </Button>
-        </div>
+    <Modal open={true} onClose={onClose} title="New Sales Rep" footer={
+      <>
+        <Button variant="outline" onClick={onClose} disabled={createMut.isPending}>Cancel</Button>
+        <Button
+          onClick={() => createMut.mutate()}
+          disabled={createMut.isPending || !form.userId || !form.branchId || !form.employeeCode}
+        >
+          {createMut.isPending ? <Spinner size="sm" /> : null} Create
+        </Button>
+      </>
+    }>
+      <div className="space-y-4">
+        <Select
+          label="User"
+          value={form.userId}
+          onChange={(e) => setForm((f) => ({ ...f, userId: e.target.value }))}
+          required
+        >
+          <option value="">Select user</option>
+          {(usersQ.data?.items ?? []).map((u: any) => (
+            <option key={u.id} value={u.id}>{u.fullName} ({u.email})</option>
+          ))}
+        </Select>
+        <Select
+          label="Branch"
+          value={form.branchId}
+          onChange={(e) => setForm((f) => ({ ...f, branchId: e.target.value }))}
+          required
+        >
+          <option value="">Select branch</option>
+          {(branchesQ.data?.items ?? []).map((b) => (
+            <option key={b.id} value={b.id}>{b.name}</option>
+          ))}
+        </Select>
+        <Input
+          label="Employee Code"
+          value={form.employeeCode}
+          onChange={(e) => setForm((f) => ({ ...f, employeeCode: e.target.value }))}
+          placeholder="EMP-001"
+          required
+        />
       </div>
-    </div>
+    </Modal>
   );
 }

@@ -52,6 +52,7 @@ enum InventoryEventType {
   STOCK_ADJUSTMENT_APPROVED
   SALE_DEDUCTED
   REVERSAL_EVENT
+  STOCK_TRANSFER
 }
 
 enum InventoryEventStatus {
@@ -66,10 +67,13 @@ enum InventoryMovementType {
   ADJUSTMENT
   SALE_DEDUCTION
   REVERSAL
+  TRANSFER_OUT
+  TRANSFER_IN
 }
 
 enum ReferenceType {
   STOCK_ADJUSTMENT
+  STOCK_TRANSFER
   INVOICE
   PAYMENT
   RETAILER
@@ -82,6 +86,18 @@ enum ReferenceType {
   SALES_REP
   AUTH
   DASHBOARD
+  ROUTE
+  SALES_ORDER
+  DELIVERY
+  NOTIFICATION
+  STOCK_COUNT
+  DAMAGE_REPORT
+  RETAILER_PORTAL
+  RETAILER_NOTIFICATION
+  RETAILER_LEDGER
+  FINANCIAL_LEDGER
+  CASH_SESSION
+  CREDIT_APPROVAL
 }
 
 enum StockAdjustmentStatus {
@@ -89,6 +105,13 @@ enum StockAdjustmentStatus {
   SUBMITTED
   APPROVED
   POSTED
+  CANCELLED
+}
+
+enum StockTransferStatus {
+  DRAFT
+  SHIPPED
+  RECEIVED
   CANCELLED
 }
 
@@ -129,7 +152,10 @@ enum RetailerLedgerEntryType {
   INVOICE_DEBIT
   PAYMENT_CREDIT
   REVERSAL
-  ADJUSTMENT
+  ADJUSTMENT_DEBIT
+  ADJUSTMENT_CREDIT
+  CREDIT_LIMIT_INCREASE
+  CREDIT_LIMIT_DECREASE
 }
 
 enum FinancialLedgerEntryType {
@@ -137,6 +163,53 @@ enum FinancialLedgerEntryType {
   RECEIVABLE_DEBIT
   SALES_CREDIT
   PAYMENT_CREDIT
+  EXPENSE_DEBIT
+  ADJUSTMENT
+}
+
+enum CashSessionStatus {
+  OPEN
+  CLOSED
+}
+
+enum CreditApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum RouteStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum SalesOrderStatus {
+  DRAFT
+  CONFIRMED
+  INVOICED
+  CANCELLED
+}
+
+enum DeliveryStatus {
+  PENDING
+  IN_TRANSIT
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+enum NotificationType {
+  LOW_STOCK
+  OUT_OF_STOCK
+  ORDER_CONFIRMED
+  DELIVERY_UPDATE
+  SYSTEM
+}
+
+enum NotificationStatus {
+  UNREAD
+  READ
+  DISMISSED
 }
 
 enum AuditAction {
@@ -163,6 +236,9 @@ enum AuditAction {
   STOCK_ADJUSTMENT_SUBMITTED
   STOCK_ADJUSTMENT_APPROVED
   STOCK_ADJUSTMENT_POSTED
+  STOCK_TRANSFER_CREATED
+  STOCK_TRANSFER_SHIPPED
+  STOCK_TRANSFER_RECEIVED
   RETAILER_CREATED
   RETAILER_UPDATED
   SALES_REP_CREATED
@@ -173,6 +249,39 @@ enum AuditAction {
   INVOICE_VOIDED
   INVOICE_CANCELLED
   PAYMENT_RECORDED
+  ROUTE_CREATED
+  ROUTE_UPDATED
+  SALES_ORDER_CREATED
+  SALES_ORDER_CONFIRMED
+  SALES_ORDER_INVOICED
+  SALES_ORDER_CANCELLED
+  DELIVERY_CREATED
+  DELIVERY_UPDATED
+  DELIVERY_COMPLETED
+  STOCK_COUNT_STARTED
+  STOCK_COUNT_UPDATED
+  STOCK_COUNT_SUBMITTED
+  STOCK_COUNT_RECONCILED
+  STOCK_COUNT_CANCELLED
+  DAMAGE_REPORTED
+  DAMAGE_APPROVED
+  DAMAGE_POSTED
+  EXPIRY_DETECTED
+  BATCH_BLOCKED
+  BATCH_EXPIRED
+  RETAILER_LOGIN
+  RETAILER_PIN_SET
+  RETAILER_ORDER_PLACED
+  RETAILER_ORDER_CANCELLED
+  RETAILER_DEVICE_REGISTERED
+  RETAILER_NOTIFICATION_SENT
+  CREDIT_LIMIT_REQUESTED
+  CREDIT_LIMIT_APPROVED
+  CREDIT_LIMIT_REJECTED
+  CASH_SESSION_OPENED
+  CASH_SESSION_CLOSED
+  PAYMENT_ALLOCATED
+  LEDGER_ENTRY_CREATED
 }
 
 model User {
@@ -188,45 +297,61 @@ model User {
   updatedAt       DateTime   @updatedAt
   deletedAt       DateTime?
 
-  defaultBranch             Branch?               @relation("UserDefaultBranch", fields: [defaultBranchId], references: [id], onDelete: SetNull)
-  sessions                  Session[]
-  loginAttempts             LoginAttempt[]
-  userRoles                 UserRole[]
-  auditLogs                 AuditLog[]            @relation("AuditActor")
-  createdInventoryEvents    InventoryEvent[]      @relation("InventoryEventCreator")
-  approvedInventoryEvents   InventoryEvent[]      @relation("InventoryEventApprover")
-  createdMovements          InventoryMovement[]   @relation("InventoryMovementCreator")
-  createdStockAdjustments   StockAdjustment[]     @relation("StockAdjustmentCreator")
-  submittedStockAdjustments StockAdjustment[]     @relation("StockAdjustmentSubmitter")
-  approvedStockAdjustments  StockAdjustment[]     @relation("StockAdjustmentApprover")
-  postedStockAdjustments    StockAdjustment[]     @relation("StockAdjustmentPoster")
-  createdRetailers          Retailer[]            @relation("RetailerCreator")
-  createdSalesReps          SalesRep[]            @relation("SalesRepCreator")
-  salesRepProfile           SalesRep?
-  createdInvoices           Invoice[]             @relation("InvoiceCreator")
-  postedInvoices            Invoice[]             @relation("InvoicePoster")
-  voidedInvoices            Invoice[]             @relation("InvoiceVoider")
-  receivedPayments          Payment[]             @relation("PaymentReceiver")
-  retailerLedgerEntries     RetailerLedgerEntry[] @relation("RetailerLedgerCreator")
-  financialLedgerEntries    FinancialLedgerEntry[] @relation("FinancialLedgerCreator")
+  defaultBranch              Branch?                @relation("UserDefaultBranch", fields: [defaultBranchId], references: [id], onDelete: SetNull)
+  sessions                   Session[]
+  loginAttempts              LoginAttempt[]
+  userRoles                  UserRole[]
+  auditLogs                  AuditLog[]             @relation("AuditActor")
+  createdInventoryEvents     InventoryEvent[]       @relation("InventoryEventCreator")
+  approvedInventoryEvents    InventoryEvent[]       @relation("InventoryEventApprover")
+  createdMovements           InventoryMovement[]    @relation("InventoryMovementCreator")
+  createdStockAdjustments    StockAdjustment[]      @relation("StockAdjustmentCreator")
+  submittedStockAdjustments  StockAdjustment[]      @relation("StockAdjustmentSubmitter")
+  approvedStockAdjustments   StockAdjustment[]      @relation("StockAdjustmentApprover")
+  postedStockAdjustments     StockAdjustment[]      @relation("StockAdjustmentPoster")
+  createdStockTransfers      StockTransfer[]        @relation("StockTransferCreator")
+  shippedStockTransfers      StockTransfer[]        @relation("StockTransferShipper")
+  receivedStockTransfers     StockTransfer[]        @relation("StockTransferReceiver")
+  createdRetailers           Retailer[]             @relation("RetailerCreator")
+  createdSalesReps           SalesRep[]             @relation("SalesRepCreator")
+  salesRepProfile            SalesRep?
+  createdInvoices            Invoice[]              @relation("InvoiceCreator")
+  postedInvoices             Invoice[]              @relation("InvoicePoster")
+  voidedInvoices             Invoice[]              @relation("InvoiceVoider")
+  receivedPayments           Payment[]              @relation("PaymentReceiver")
+  retailerLedgerEntries      RetailerLedgerEntry[]  @relation("RetailerLedgerCreator")
+  financialLedgerEntries     FinancialLedgerEntry[] @relation("FinancialLedgerCreator")
+  stockCounts                StockCount[]           @relation("StockCountCounter")
 
-  passwordResetTokens     PasswordResetToken[]
+  passwordResetTokens   PasswordResetToken[]
+  devices               Device[]
+  createdRoutes         Route[]         @relation("RouteCreator")
+  createdSalesOrders    SalesOrder[]    @relation("SalesOrderCreator")
+  createdDeliveries     Delivery[]      @relation("DeliveryCreator")
+  notifications         Notification[]
+  createdDamageReports  DamageReport[]  @relation("DamageReportCreator")
+  approvedDamageReports DamageReport[]  @relation("DamageReportApprover")
+  postedDamageReports   DamageReport[]  @relation("DamageReportPoster")
+  openedCashSessions    CashSession[]   @relation("CashSessionOpener")
+  closedCashSessions    CashSession[]   @relation("CashSessionCloser")
+  requestedCreditApprovals CreditApproval[] @relation("CreditApprovalRequester")
+  approvedCreditApprovals  CreditApproval[] @relation("CreditApprovalApprover")
 
   @@index([status])
   @@index([defaultBranchId])
 }
 
 model Session {
-  id                String   @id @default(uuid())
-  userId            String
-  tokenHash         String?
-  refreshTokenHash  String?
-  refreshExpiresAt  DateTime?
-  expiresAt         DateTime
-  userAgent         String?
-  ipAddress         String?
-  createdAt         DateTime @default(now())
-  revokedAt         DateTime?
+  id               String    @id @default(uuid())
+  userId           String
+  tokenHash        String?
+  refreshTokenHash String?
+  refreshExpiresAt DateTime?
+  expiresAt        DateTime
+  userAgent        String?
+  ipAddress        String?
+  createdAt        DateTime  @default(now())
+  revokedAt        DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -327,20 +452,31 @@ model Branch {
   updatedAt     DateTime         @updatedAt
   deletedAt     DateTime?
 
-  defaultUsers          User[]                @relation("UserDefaultBranch")
-  warehouses            Warehouse[]
-  inventoryLocations    InventoryLocation[]
-  userRoles             UserRole[]
-  inventoryEvents       InventoryEvent[]
-  inventoryMovements    InventoryMovement[]
-  stockAdjustments      StockAdjustment[]
-  retailers             Retailer[]
-  salesReps             SalesRep[]
-  invoices              Invoice[]
-  payments              Payment[]
-  retailerLedgerEntries RetailerLedgerEntry[]
-  financialLedgerEntries FinancialLedgerEntry[]
-  auditLogs             AuditLog[]
+  defaultUsers              User[]                 @relation("UserDefaultBranch")
+  warehouses                Warehouse[]
+  inventoryLocations        InventoryLocation[]
+  userRoles                 UserRole[]
+  inventoryEvents           InventoryEvent[]
+  inventoryMovements        InventoryMovement[]
+  stockAdjustments          StockAdjustment[]
+  stockTransfersOrigin      StockTransfer[]        @relation("StockTransferOriginBranch")
+  stockTransfersDestination StockTransfer[]        @relation("StockTransferDestinationBranch")
+  retailers                 Retailer[]
+  salesReps                 SalesRep[]
+  invoices                  Invoice[]
+  payments                  Payment[]
+  retailerLedgerEntries     RetailerLedgerEntry[]
+  financialLedgerEntries    FinancialLedgerEntry[]
+  auditLogs                 AuditLog[]
+  StockCount                StockCount[]
+  routes                    Route[]
+  salesOrders               SalesOrder[]
+  deliveries                Delivery[]
+  notifications             Notification[]
+  damageReports             DamageReport[]
+  expiryEvents              ExpiryEvent[]
+  cashSessions              CashSession[]
+  creditApprovals           CreditApproval[]
 
   @@index([status])
 }
@@ -355,11 +491,15 @@ model Warehouse {
   updatedAt DateTime         @updatedAt
   deletedAt DateTime?
 
-  branch            Branch             @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  inventoryLocation InventoryLocation?
-  userRoles         UserRole[]
-  stockAdjustments  StockAdjustment[]
-  invoices          Invoice[]
+  branch                    Branch             @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  inventoryLocation         InventoryLocation?
+  userRoles                 UserRole[]
+  stockAdjustments          StockAdjustment[]
+  stockTransfersOrigin      StockTransfer[]    @relation("StockTransferOriginWarehouse")
+  stockTransfersDestination StockTransfer[]    @relation("StockTransferDestinationWarehouse")
+  invoices                  Invoice[]
+  StockCount                StockCount[]
+  damageReports             DamageReport[]
 
   @@unique([branchId, code])
   @@index([branchId])
@@ -377,12 +517,17 @@ model InventoryLocation {
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
 
-  branch             Branch              @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  warehouse          Warehouse?          @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  snapshots          InventorySnapshot[]
-  movements          InventoryMovement[]
-  stockAdjustments   StockAdjustment[]
-  invoices           Invoice[]
+  branch                    Branch              @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  warehouse                 Warehouse?          @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  snapshots                 InventorySnapshot[]
+  movements                 InventoryMovement[]
+  stockAdjustments          StockAdjustment[]
+  stockTransfersOrigin      StockTransfer[]     @relation("StockTransferOriginLocation")
+  stockTransfersDestination StockTransfer[]     @relation("StockTransferDestinationLocation")
+  invoices                  Invoice[]
+  StockCount                StockCount[]
+  damageReports             DamageReport[]
+  expiryEvents              ExpiryEvent[]
 
   @@unique([branchId, code])
   @@index([branchId])
@@ -405,7 +550,7 @@ model Brand {
   id        String           @id @default(uuid())
   code      String           @unique
   name      String
-  status    MasterDataStatus @default(ACTIVE)
+  status      MasterDataStatus @default(ACTIVE)
   createdAt DateTime         @default(now())
   updatedAt DateTime         @updatedAt
 
@@ -421,30 +566,34 @@ model Unit {
   createdAt DateTime         @default(now())
   updatedAt DateTime         @updatedAt
 
-  defaultForProducts Product[]            @relation("ProductDefaultUnit")
-  productUnits       ProductUnit[]
-  snapshots          InventorySnapshot[]
-  movements          InventoryMovement[]
+  defaultForProducts   Product[]             @relation("ProductDefaultUnit")
+  productUnits         ProductUnit[]
+  snapshots            InventorySnapshot[]
+  movements            InventoryMovement[]
   stockAdjustmentItems StockAdjustmentItem[]
-  invoiceItems       InvoiceItem[]
+  stockTransferItems   StockTransferItem[]
+  invoiceItems         InvoiceItem[]
+  StockCountItem       StockCountItem[]
+  salesOrderItems      SalesOrderItem[]
+  damageReportItems    DamageReportItem[]
 }
 
 model Product {
-  id              String   @id @default(uuid())
-  skuCode         String   @unique
+  id              String    @id @default(uuid())
+  skuCode         String    @unique
   name            String
   description     String?
   categoryId      String
   brandId         String?
   defaultUnitId   String
   barcode         String?
-  isBatchTracked  Boolean  @default(true)
-  isExpiryTracked Boolean  @default(false)
-  costPrice       Decimal? @db.Decimal(18, 4)
-  mrp             Decimal? @db.Decimal(18, 4)
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  isBatchTracked  Boolean   @default(true)
+  isExpiryTracked Boolean   @default(false)
+  costPrice       Decimal?  @db.Decimal(18, 4)
+  mrp             Decimal?  @db.Decimal(18, 4)
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
   deletedAt       DateTime?
 
   category             Category              @relation(fields: [categoryId], references: [id], onDelete: Restrict)
@@ -455,7 +604,12 @@ model Product {
   snapshots            InventorySnapshot[]
   movements            InventoryMovement[]
   stockAdjustmentItems StockAdjustmentItem[]
+  stockTransferItems   StockTransferItem[]
   invoiceItems         InvoiceItem[]
+  StockCountItem       StockCountItem[]
+  salesOrderItems      SalesOrderItem[]
+  damageReportItems    DamageReportItem[]
+  expiryEvents         ExpiryEvent[]
 
   @@index([categoryId])
   @@index([brandId])
@@ -465,13 +619,13 @@ model Product {
 }
 
 model ProductUnit {
-  id                 String   @id @default(uuid())
-  productId          String
-  unitId             String
-  conversionToBase   Decimal  @db.Decimal(18, 6)
-  isBaseUnit         Boolean  @default(false)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id               String   @id @default(uuid())
+  productId        String
+  unitId           String
+  conversionToBase Decimal  @db.Decimal(18, 6)
+  isBaseUnit       Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
   unit    Unit    @relation(fields: [unitId], references: [id], onDelete: Restrict)
@@ -498,7 +652,12 @@ model Batch {
   snapshots            InventorySnapshot[]
   movements            InventoryMovement[]
   stockAdjustmentItems StockAdjustmentItem[]
+  stockTransferItems   StockTransferItem[]
   invoiceItems         InvoiceItem[]
+  StockCountItem       StockCountItem[]
+  salesOrderItems      SalesOrderItem[]
+  damageReportItems    DamageReportItem[]
+  expiryEvents         ExpiryEvent[]
 
   @@unique([productId, batchNumber])
   @@index([productId])
@@ -535,24 +694,24 @@ model InventoryEvent {
 }
 
 model InventoryMovement {
-  id                 String                @id @default(uuid())
-  inventoryEventId   String
-  branchId           String
-  locationId         String
-  productId          String
-  batchId            String?
-  stockState         StockState            @default(AVAILABLE)
-  quantityDelta      Decimal               @db.Decimal(18, 6)
-  baseQuantityDelta  Decimal               @db.Decimal(18, 6)
-  unitId             String
-  movementType       InventoryMovementType
-  referenceType      ReferenceType
-  referenceId        String
-  reasonCode         String?
-  createdById        String
-  occurredAt         DateTime              @default(now())
-  metadata           Json?
-  createdAt          DateTime              @default(now())
+  id                String                @id @default(uuid())
+  inventoryEventId  String
+  branchId          String
+  locationId        String
+  productId         String
+  batchId           String?
+  stockState        StockState            @default(AVAILABLE)
+  quantityDelta     Decimal               @db.Decimal(18, 6)
+  baseQuantityDelta Decimal               @db.Decimal(18, 6)
+  unitId            String
+  movementType      InventoryMovementType
+  referenceType     ReferenceType
+  referenceId       String
+  reasonCode        String?
+  createdById       String
+  occurredAt        DateTime              @default(now())
+  metadata          Json?
+  createdAt         DateTime              @default(now())
 
   inventoryEvent InventoryEvent    @relation(fields: [inventoryEventId], references: [id], onDelete: Restrict)
   branch         Branch            @relation(fields: [branchId], references: [id], onDelete: Restrict)
@@ -598,31 +757,31 @@ model InventorySnapshot {
 }
 
 model StockAdjustment {
-  id           String                @id @default(uuid())
-  adjustmentNo String                @unique
-  branchId     String
-  warehouseId  String
-  locationId   String
-  status       StockAdjustmentStatus @default(DRAFT)
-  reason       String
-  notes        String?
-  createdById  String
+  id            String                @id @default(uuid())
+  adjustmentNo  String                @unique
+  branchId      String
+  warehouseId   String
+  locationId    String
+  status        StockAdjustmentStatus @default(DRAFT)
+  reason        String
+  notes         String?
+  createdById   String
   submittedById String?
-  approvedById String?
-  postedById   String?
-  submittedAt  DateTime?
-  approvedAt   DateTime?
-  postedAt     DateTime?
-  createdAt    DateTime             @default(now())
-  updatedAt    DateTime             @updatedAt
+  approvedById  String?
+  postedById    String?
+  submittedAt   DateTime?
+  approvedAt    DateTime?
+  postedAt      DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
 
-  branch      Branch             @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  warehouse   Warehouse          @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
-  location    InventoryLocation  @relation(fields: [locationId], references: [id], onDelete: Restrict)
-  createdBy   User               @relation("StockAdjustmentCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  submittedBy User?              @relation("StockAdjustmentSubmitter", fields: [submittedById], references: [id], onDelete: Restrict)
-  approvedBy  User?              @relation("StockAdjustmentApprover", fields: [approvedById], references: [id], onDelete: Restrict)
-  postedBy    User?              @relation("StockAdjustmentPoster", fields: [postedById], references: [id], onDelete: Restrict)
+  branch      Branch                @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  warehouse   Warehouse             @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  location    InventoryLocation     @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  createdBy   User                  @relation("StockAdjustmentCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  submittedBy User?                 @relation("StockAdjustmentSubmitter", fields: [submittedById], references: [id], onDelete: Restrict)
+  approvedBy  User?                 @relation("StockAdjustmentApprover", fields: [approvedById], references: [id], onDelete: Restrict)
+  postedBy    User?                 @relation("StockAdjustmentPoster", fields: [postedById], references: [id], onDelete: Restrict)
   items       StockAdjustmentItem[]
 
   @@index([branchId])
@@ -632,17 +791,17 @@ model StockAdjustment {
 }
 
 model StockAdjustmentItem {
-  id                 String   @id @default(uuid())
-  stockAdjustmentId  String
-  productId          String
-  batchId            String?
-  unitId             String
-  stockState         StockState @default(AVAILABLE)
-  quantityDelta      Decimal  @db.Decimal(18, 6)
-  baseQuantityDelta  Decimal  @db.Decimal(18, 6)
-  reasonCode         String?
-  notes              String?
-  createdAt          DateTime @default(now())
+  id                String     @id @default(uuid())
+  stockAdjustmentId String
+  productId         String
+  batchId           String?
+  unitId            String
+  stockState        StockState @default(AVAILABLE)
+  quantityDelta     Decimal    @db.Decimal(18, 6)
+  baseQuantityDelta Decimal    @db.Decimal(18, 6)
+  reasonCode        String?
+  notes             String?
+  createdAt         DateTime   @default(now())
 
   stockAdjustment StockAdjustment @relation(fields: [stockAdjustmentId], references: [id], onDelete: Cascade)
   product         Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
@@ -650,6 +809,109 @@ model StockAdjustmentItem {
   unit            Unit            @relation(fields: [unitId], references: [id], onDelete: Restrict)
 
   @@index([stockAdjustmentId])
+  @@index([productId])
+  @@index([batchId])
+}
+
+model StockCount {
+  id           String           @id @default(uuid())
+  branchId     String
+  warehouseId  String
+  locationId   String
+  status       String           @default("DRAFT") // DRAFT, SUBMITTED, RECONCILED, CANCELLED
+  countedById  String
+  startedAt    DateTime         @default(now())
+  completedAt  DateTime?
+  reconciledAt DateTime?
+  items        StockCountItem[]
+
+  branch    Branch            @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  warehouse Warehouse         @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  location  InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  countedBy User              @relation("StockCountCounter", fields: [countedById], references: [id], onDelete: Restrict)
+
+  @@index([branchId])
+  @@index([warehouseId])
+  @@index([locationId])
+  @@index([status])
+}
+
+model StockCountItem {
+  id              String  @id @default(uuid())
+  stockCountId    String
+  productId       String
+  batchId         String?
+  unitId          String
+  systemQuantity  Decimal @db.Decimal(18, 6)
+  countedQuantity Decimal @db.Decimal(18, 6)
+  variance        Decimal @db.Decimal(18, 6)
+  isReconciled    Boolean @default(false)
+
+  stockCount StockCount @relation(fields: [stockCountId], references: [id], onDelete: Cascade)
+  product    Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  batch      Batch?     @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  unit       Unit       @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@index([stockCountId])
+  @@index([productId])
+}
+
+model StockTransfer {
+  id              String              @id @default(uuid())
+  transferNo      String              @unique
+  fromBranchId    String
+  fromWarehouseId String
+  fromLocationId  String
+  toBranchId      String
+  toWarehouseId   String
+  toLocationId    String
+  status          StockTransferStatus @default(DRAFT)
+  notes           String?
+  createdById     String
+  shippedById     String?
+  receivedById    String?
+  shippedAt       DateTime?
+  receivedAt      DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  fromBranch      Branch            @relation("StockTransferOriginBranch", fields: [fromBranchId], references: [id], onDelete: Restrict)
+  fromWarehouse   Warehouse         @relation("StockTransferOriginWarehouse", fields: [fromWarehouseId], references: [id], onDelete: Restrict)
+  fromLocation    InventoryLocation @relation("StockTransferOriginLocation", fields: [fromLocationId], references: [id], onDelete: Restrict)
+  toBranch        Branch            @relation("StockTransferDestinationBranch", fields: [toBranchId], references: [id], onDelete: Restrict)
+  toWarehouse     Warehouse         @relation("StockTransferDestinationWarehouse", fields: [toWarehouseId], references: [id], onDelete: Restrict)
+  toLocation      InventoryLocation @relation("StockTransferDestinationLocation", fields: [toLocationId], references: [id], onDelete: Restrict)
+  createdBy       User              @relation("StockTransferCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  shippedBy       User?             @relation("StockTransferShipper", fields: [shippedById], references: [id], onDelete: Restrict)
+  receivedBy      User?             @relation("StockTransferReceiver", fields: [receivedById], references: [id], onDelete: Restrict)
+  items           StockTransferItem[]
+
+  @@index([fromBranchId])
+  @@index([toBranchId])
+  @@index([status])
+}
+
+model StockTransferItem {
+  id                    String     @id @default(uuid())
+  stockTransferId       String
+  productId             String
+  batchId               String?
+  unitId                String
+  stockState            StockState @default(AVAILABLE)
+  quantity              Decimal    @db.Decimal(18, 6)
+  baseQuantity          Decimal    @db.Decimal(18, 6)
+  receivedQuantity      Decimal?   @db.Decimal(18, 6)
+  receivedBaseQuantity  Decimal?   @db.Decimal(18, 6)
+  varianceQuantity      Decimal?   @db.Decimal(18, 6)
+  varianceBaseQuantity  Decimal?   @db.Decimal(18, 6)
+  createdAt             DateTime   @default(now())
+
+  stockTransfer StockTransfer @relation(fields: [stockTransferId], references: [id], onDelete: Cascade)
+  product       Product       @relation(fields: [productId], references: [id], onDelete: Restrict)
+  batch         Batch?        @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  unit          Unit          @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@index([stockTransferId])
   @@index([productId])
   @@index([batchId])
 }
@@ -663,6 +925,7 @@ model Retailer {
   phone       String
   address     String?
   creditLimit Decimal        @default(0) @db.Decimal(18, 4)
+  pinHash     String?        // Phase 5: self-service PIN auth
   status      RetailerStatus @default(ACTIVE)
   createdById String
   createdAt   DateTime       @default(now())
@@ -674,6 +937,14 @@ model Retailer {
   invoices      Invoice[]
   payments      Payment[]
   ledgerEntries RetailerLedgerEntry[]
+  routeStops    RouteStop[]
+  salesOrders   SalesOrder[]
+  deliveryItems DeliveryItem[]
+  sessions      RetailerSession[]
+  devices       RetailerDevice[]
+  notifications RetailerNotification[]
+  orderPreference RetailerOrderPreference?
+  creditApprovals CreditApproval[]
 
   @@unique([branchId, code])
   @@index([branchId])
@@ -695,6 +966,8 @@ model SalesRep {
   user      User   @relation(fields: [userId], references: [id], onDelete: Restrict)
   branch    Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
   createdBy User   @relation("SalesRepCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  routes    Route[]
+  orders    SalesOrder[]
 
   @@unique([branchId, employeeCode])
   @@index([branchId])
@@ -735,6 +1008,8 @@ model Invoice {
   voidedBy       User?             @relation("InvoiceVoider", fields: [voidedById], references: [id], onDelete: Restrict)
   items          InvoiceItem[]
   payments       Payment[]
+  salesOrder     SalesOrder?
+  deliveryItems  DeliveryItem[]
 
   @@index([branchId])
   @@index([retailerId])
@@ -837,7 +1112,7 @@ model FinancialLedgerEntry {
 }
 
 model AuditLog {
-  id          String      @id @default(uuid())
+  id          String        @id @default(uuid())
   branchId    String?
   actorUserId String
   action      AuditAction
@@ -848,7 +1123,7 @@ model AuditLog {
   reason      String?
   ipAddress   String?
   userAgent   String?
-  createdAt   DateTime    @default(now())
+  createdAt   DateTime      @default(now())
 
   branch Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
   actor  User    @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
@@ -857,5 +1132,444 @@ model AuditLog {
   @@index([actorUserId])
   @@index([action])
   @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  usedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+model Device {
+  id           String   @id @default(uuid())
+  userId       String
+  deviceId     String
+  deviceType   String?
+  userAgent    String?
+  ipAddress    String?
+  isTrusted    Boolean  @default(false)
+  lastActiveAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, deviceId])
+  @@index([userId])
+}
+
+// ─── Phase 2: Routes ──────────────────────────────────────────────────────────
+
+model Route {
+  id          String      @id @default(uuid())
+  branchId    String
+  salesRepId  String
+  code        String
+  name        String
+  description String?
+  status      RouteStatus @default(ACTIVE)
+  createdById String
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  deletedAt   DateTime?
+
+  branch      Branch           @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  salesRep    SalesRep         @relation(fields: [salesRepId], references: [id], onDelete: Restrict)
+  createdBy   User             @relation("RouteCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  stops       RouteStop[]
+  orders      SalesOrder[]
+  deliveries  Delivery[]
+
+  @@unique([branchId, code])
+  @@index([branchId])
+  @@index([salesRepId])
+  @@index([status])
+}
+
+model RouteStop {
+  id         String   @id @default(uuid())
+  routeId    String
+  retailerId String
+  stopOrder  Int
+  notes      String?
+  createdAt  DateTime @default(now())
+
+  route    Route    @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  retailer Retailer @relation(fields: [retailerId], references: [id], onDelete: Restrict)
+
+  @@unique([routeId, retailerId])
+  @@index([routeId])
+  @@index([retailerId])
+}
+
+// ─── Phase 2: Sales Orders ───────────────────────────────────────────────────
+
+model SalesOrder {
+  id          String           @id @default(uuid())
+  orderNo     String           @unique
+  branchId    String
+  salesRepId  String?
+  routeId     String?
+  retailerId  String
+  status      SalesOrderStatus @default(DRAFT)
+  notes       String?
+  subtotal    Decimal          @default(0) @db.Decimal(18, 4)
+  grandTotal  Decimal          @default(0) @db.Decimal(18, 4)
+  invoiceId   String?          @unique
+  createdById String?
+  confirmedAt DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  branch    Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  salesRep  SalesRep?  @relation(fields: [salesRepId], references: [id], onDelete: SetNull)
+  route     Route?     @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  retailer  Retailer   @relation(fields: [retailerId], references: [id], onDelete: Restrict)
+  invoice   Invoice?   @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  createdBy User?      @relation("SalesOrderCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  items     SalesOrderItem[]
+
+  @@index([branchId])
+  @@index([salesRepId])
+  @@index([routeId])
+  @@index([retailerId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model SalesOrderItem {
+  id           String  @id @default(uuid())
+  salesOrderId String
+  productId    String
+  batchId      String?
+  unitId       String
+  quantity     Decimal @db.Decimal(18, 6)
+  baseQuantity Decimal @db.Decimal(18, 6)
+  unitPrice    Decimal @db.Decimal(18, 4)
+  lineTotal    Decimal @db.Decimal(18, 4)
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  product    Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  batch      Batch?     @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  unit       Unit       @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@index([salesOrderId])
+  @@index([productId])
+}
+
+// ─── Phase 2: Deliveries ─────────────────────────────────────────────────────
+
+model Delivery {
+  id           String         @id @default(uuid())
+  deliveryNo   String         @unique
+  branchId     String
+  routeId      String?
+  vehicleRef   String?
+  driverName   String?
+  status       DeliveryStatus @default(PENDING)
+  scheduledAt  DateTime?
+  dispatchedAt DateTime?
+  completedAt  DateTime?
+  notes        String?
+  createdById  String
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  branch    Branch         @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  route     Route?         @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  createdBy User           @relation("DeliveryCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  items     DeliveryItem[]
+
+  @@index([branchId])
+  @@index([routeId])
+  @@index([status])
+  @@index([scheduledAt])
+}
+
+model DeliveryItem {
+  id           String  @id @default(uuid())
+  deliveryId   String
+  retailerId   String
+  invoiceId    String?
+  orderId      String?
+  notes        String?
+  isDelivered  Boolean @default(false)
+  createdAt    DateTime @default(now())
+
+  delivery Delivery  @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  retailer Retailer  @relation(fields: [retailerId], references: [id], onDelete: Restrict)
+  invoice  Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([deliveryId])
+  @@index([retailerId])
+}
+
+// ─── Phase 2: Notifications ──────────────────────────────────────────────────
+
+model Notification {
+  id         String             @id @default(uuid())
+  branchId   String?
+  userId     String?
+  type       NotificationType
+  status     NotificationStatus @default(UNREAD)
+  title      String
+  message    String
+  entityType ReferenceType?
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime           @default(now())
+  readAt     DateTime?
+
+  branch Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([branchId])
+  @@index([userId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ─── Phase 4: Damage Workflow ─────────────────────────────────────────────────
+
+enum DamageReportStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  POSTED
+  REJECTED
+}
+
+model DamageReport {
+  id          String             @id @default(uuid())
+  reportNo    String             @unique
+  branchId    String
+  warehouseId String
+  locationId  String
+  status      DamageReportStatus @default(DRAFT)
+  reason      String
+  notes       String?
+  createdById String
+  approvedById String?
+  postedById  String?
+  submittedAt DateTime?
+  approvedAt  DateTime?
+  postedAt    DateTime?
+  rejectedAt  DateTime?
+  rejectionReason String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  branch    Branch            @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  warehouse Warehouse         @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  location  InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  createdBy User              @relation("DamageReportCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy User?            @relation("DamageReportApprover", fields: [approvedById], references: [id], onDelete: Restrict)
+  postedBy  User?             @relation("DamageReportPoster", fields: [postedById], references: [id], onDelete: Restrict)
+  items     DamageReportItem[]
+
+  @@index([branchId])
+  @@index([warehouseId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model DamageReportItem {
+  id             String  @id @default(uuid())
+  damageReportId String
+  productId      String
+  batchId        String?
+  unitId         String
+  quantity       Decimal @db.Decimal(18, 6)
+  baseQuantity   Decimal @db.Decimal(18, 6)
+  damageType     String  // PHYSICAL, EXPIRED, WATER, PEST, OTHER
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  damageReport DamageReport @relation(fields: [damageReportId], references: [id], onDelete: Cascade)
+  product      Product      @relation(fields: [productId], references: [id], onDelete: Restrict)
+  batch        Batch?       @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  unit         Unit         @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@index([damageReportId])
+  @@index([productId])
+}
+
+// ─── Phase 4: Expiry Events ───────────────────────────────────────────────────
+
+model ExpiryEvent {
+  id          String   @id @default(uuid())
+  branchId    String
+  batchId     String
+  productId   String
+  locationId  String
+  expiryDate  DateTime
+  daysToExpiry Int
+  detectedAt  DateTime @default(now())
+  isActedUpon Boolean  @default(false)
+  actionNote  String?
+
+  branch   Branch            @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  batch    Batch             @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  product  Product           @relation(fields: [productId], references: [id], onDelete: Restrict)
+  location InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  @@index([branchId])
+  @@index([batchId])
+  @@index([expiryDate])
+  @@index([isActedUpon])
+}
+
+// ─── Phase 5: Retailer Portal ──────────────────────────────────────────────────
+
+enum RetailerNotificationType {
+  ORDER_CONFIRMED
+  ORDER_SHIPPED
+  DELIVERY_UPDATE
+  PAYMENT_RECEIVED
+  PROMOTIONAL
+}
+
+enum RetailerNotificationStatus {
+  UNREAD
+  READ
+}
+
+model RetailerSession {
+  id               String    @id @default(uuid())
+  retailerId       String
+  tokenHash        String?
+  refreshTokenHash String?
+  refreshExpiresAt DateTime?
+  expiresAt        DateTime
+  userAgent        String?
+  ipAddress        String?
+  createdAt        DateTime  @default(now())
+  revokedAt        DateTime?
+
+  retailer Retailer @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+
+  @@index([retailerId])
+  @@index([expiresAt])
+  @@index([refreshTokenHash])
+}
+
+model RetailerDevice {
+  id           String   @id @default(uuid())
+  retailerId   String
+  deviceId     String
+  deviceType   String?
+  userAgent    String?
+  ipAddress    String?
+  isTrusted    Boolean  @default(false)
+  lastActiveAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  retailer Retailer @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+
+  @@unique([retailerId, deviceId])
+  @@index([retailerId])
+}
+
+model RetailerNotification {
+  id         String                     @id @default(uuid())
+  retailerId String
+  branchId   String?
+  type       RetailerNotificationType
+  status     RetailerNotificationStatus @default(UNREAD)
+  title      String
+  message    String
+  entityType ReferenceType?
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime                   @default(now())
+  readAt     DateTime?
+
+  retailer Retailer @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+
+  @@index([retailerId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model RetailerOrderPreference {
+  id              String   @id @default(uuid())
+  retailerId      String   @unique
+  preferredDay    String?  // MON, TUE, WED, THU, FRI, SAT, SUN
+  notes           String?
+  autoReorder     Boolean  @default(false)
+  notifyBySms     Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  retailer Retailer @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+
+  @@index([retailerId])
+}
+
+// ─── Phase 6: Cash Sessions ───────────────────────────────────────────────────────
+
+model CashSession {
+  id            String            @id @default(uuid())
+  branchId      String
+  openedById    String
+  closedById    String?
+  openedAt      DateTime          @default(now())
+  closedAt      DateTime?
+  openingBalance Decimal          @default(0) @db.Decimal(18, 4)
+  closingBalance Decimal?         @db.Decimal(18, 4)
+  expectedCash  Decimal?          @db.Decimal(18, 4)
+  actualCash    Decimal?          @db.Decimal(18, 4)
+  variance      Decimal?          @db.Decimal(18, 4)
+  status        CashSessionStatus @default(OPEN)
+  notes         String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  branch    Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  openedBy  User   @relation("CashSessionOpener", fields: [openedById], references: [id], onDelete: Restrict)
+  closedBy  User?  @relation("CashSessionCloser", fields: [closedById], references: [id], onDelete: SetNull)
+
+  @@index([branchId])
+  @@index([status])
+  @@index([openedAt])
+}
+
+// ─── Phase 6: Credit Approvals ────────────────────────────────────────────────────
+
+model CreditApproval {
+  id             String              @id @default(uuid())
+  retailerId     String
+  branchId       String
+  requestedById  String
+  approvedById   String?
+  oldLimit       Decimal             @db.Decimal(18, 4)
+  newLimit       Decimal             @db.Decimal(18, 4)
+  reason         String
+  status         CreditApprovalStatus @default(PENDING)
+  approvedAt     DateTime?
+  rejectionReason String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  retailer    Retailer @relation(fields: [retailerId], references: [id], onDelete: Restrict)
+  branch      Branch   @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  requestedBy User     @relation("CreditApprovalRequester", fields: [requestedById], references: [id], onDelete: Restrict)
+  approvedBy  User?    @relation("CreditApprovalApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([retailerId])
+  @@index([branchId])
+  @@index([status])
   @@index([createdAt])
 }

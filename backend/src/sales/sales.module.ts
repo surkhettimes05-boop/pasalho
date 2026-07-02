@@ -17,5 +17,6 @@ import { PaymentController } from './payment.controller';
   imports: [DatabaseModule, AuditModule, AuthModule, InventoryModule, FinanceModule],
   providers: [RetailerService, SalesRepService, InvoiceService, PaymentService],
   controllers: [RetailerController, SalesRepController, InvoiceController, PaymentController],
+  exports: [RetailerService, SalesRepService, InvoiceService, PaymentService],
 })
 export class SalesModule {}

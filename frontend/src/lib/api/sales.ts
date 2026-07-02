@@ -10,6 +10,7 @@ export interface Retailer {
   address?: string;
   creditLimit?: number | string;
   status: 'ACTIVE' | 'ON_HOLD' | 'INACTIVE';
+  updatedAt: string; // ISO timestamp from backend
 }
 
 export interface InvoiceItemInput {

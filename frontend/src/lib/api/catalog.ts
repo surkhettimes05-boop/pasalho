@@ -10,12 +10,14 @@ export interface Product {
   category?: { id: string; name: string; code: string };
   defaultUnitId: string;
   defaultUnit?: { id: string; name: string; symbol: string };
+  batches?: Array<{ id: string }>;
   isBatchTracked: boolean;
   isExpiryTracked: boolean;
   isActive?: boolean;
   costPrice?: number | string;
   mrp?: number | string;
   status?: 'ACTIVE' | 'INACTIVE'; // derived display field
+  updatedAt: string; // ISO timestamp from backend
 }
 
 export interface Category {

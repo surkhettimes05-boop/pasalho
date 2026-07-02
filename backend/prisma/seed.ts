@@ -54,6 +54,18 @@ async function main() {
     { code: 'audit_logs.view', module: 'audit_logs', action: 'view', description: 'View audit logs' },
     // Dashboard
     { code: 'dashboard.view', module: 'dashboard', action: 'view', description: 'View dashboard' },
+    // Phase 2 — Field Operations
+    { code: 'routes.view', module: 'routes', action: 'view', description: 'View routes' },
+    { code: 'routes.manage', module: 'routes', action: 'manage', description: 'Create and manage routes' },
+    { code: 'sales-orders.view', module: 'sales-orders', action: 'view', description: 'View sales orders' },
+    { code: 'sales-orders.create', module: 'sales-orders', action: 'create', description: 'Create sales orders' },
+    { code: 'deliveries.view', module: 'deliveries', action: 'view', description: 'View deliveries' },
+    { code: 'deliveries.manage', module: 'deliveries', action: 'manage', description: 'Manage deliveries' },
+    // Inventory transfers
+    { code: 'inventory.transfer.create', module: 'inventory', action: 'transfer.create', description: 'Create stock transfers' },
+    { code: 'inventory.transfer.ship', module: 'inventory', action: 'transfer.ship', description: 'Ship stock transfers' },
+    { code: 'inventory.transfer.receive', module: 'inventory', action: 'transfer.receive', description: 'Receive stock transfers' },
+    { code: 'inventory.reserve', module: 'inventory', action: 'reserve', description: 'Reserve/release stock' },
   ];
 
   for (const perm of permissionDefs) {

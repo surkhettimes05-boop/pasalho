@@ -13,9 +13,11 @@ import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table';
 import { Modal } from '../_components/Modal';
 import { BatchSelect } from '../_components/ProductBatches';
 import { BarcodeScanner } from '@/components/barcode-scanner';
+import { db, LocalProduct, LocalRetailer } from '@/lib/db';
+import { SyncService } from '@/lib/sync-service';
 import { catalogApi, Product } from '@/lib/api/catalog';
 import { organizationApi, Warehouse } from '@/lib/api/organization';
-import { salesApi, Invoice, InvoiceItemInput, Retailer } from '@/lib/api/sales';
+import { salesApi, Invoice, InvoiceItemInput } from '@/lib/api/sales';
 import { api } from '@/lib/api/client';
 import { toast } from '@/components/ui/toaster';
 import { formatCurrency } from '@/lib/utils/cn';
@@ -26,6 +28,12 @@ type LineItem = InvoiceItemInput & {
   unitSymbol: string;
   isBatchTracked: boolean;
   rowKey: string;
+};
+
+type RetailerOption = {
+  id: string;
+  shopName: string;
+  ownerName?: string | null;
 };
 
 const EMPTY_ITEM: Omit<LineItem, 'productName' | 'productSku' | 'unitSymbol' | 'isBatchTracked' | 'rowKey'> = {
@@ -43,37 +51,75 @@ export default function NewInvoicePage() {
   const [retailerId, setRetailerId] = useState('');
   const [items, setItems] = useState<LineItem[]>([]);
   const [productSearch, setProductSearch] = useState('');
-  const [debouncedProductSearch, setDebouncedProductSearch] = useState('');
+  const [localProducts, setLocalProducts] = useState<LocalProduct[]>([]);
+  const [isOffline, setIsOffline] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
 
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedProductSearch(productSearch), 300);
-    return () => clearTimeout(t);
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    setIsOffline(!navigator.onLine);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!productSearch) {
+      setLocalProducts([]);
+      return;
+    }
+    const search = async () => {
+      // Simple offline search using startsWith on SKU/Barcode/Name
+      const results = await db.products
+        .where('name').startsWithIgnoreCase(productSearch)
+        .or('skuCode').startsWithIgnoreCase(productSearch)
+        .or('barcode').startsWithIgnoreCase(productSearch)
+        .limit(20)
+        .toArray();
+      setLocalProducts(results as LocalProduct[]);
+    };
+    search();
   }, [productSearch]);
 
   const warehousesQ = useQuery({
     queryKey: ['warehouses-all'],
     queryFn: async () => (await organizationApi.listWarehouses()).items,
+    retry: 1,
   });
+
+  // Derive the full warehouse object from the selected warehouseId
+  const selectedWarehouse = useMemo(
+    () => (warehousesQ.data ?? []).find((w) => w.id === warehouseId) ?? null,
+    [warehousesQ.data, warehouseId],
+  );
 
   const retailersQ = useQuery({
     queryKey: ['retailers-all'],
-    queryFn: async () => (await salesApi.listRetailers()).items,
+    queryFn: async () => {
+      if (!navigator.onLine) {
+        return { items: await db.retailers.toArray() };
+      }
+      return salesApi.listRetailers();
+    },
   });
 
+  // Online product search query (debounced via productSearch state)
   const productsQ = useQuery({
-    queryKey: ['pos-products', debouncedProductSearch],
-    queryFn: () =>
-      catalogApi.listProducts({
-        search: debouncedProductSearch || undefined,
-        limit: 12,
-      }),
+    queryKey: ['products-search', productSearch],
+    queryFn: () => catalogApi.listProducts({ search: productSearch, limit: 20 }),
+    enabled: !!productSearch && navigator.onLine,
+    staleTime: 30_000,
   });
 
-  const selectedWarehouse: Warehouse | undefined = warehousesQ.data?.find((w) => w.id === warehouseId);
+  const addProduct = (p: Product | LocalProduct) => {
+    const unitId = 'defaultUnitId' in p ? p.defaultUnitId : (p as any).unitId;
+    const unitSymbol = 'defaultUnit' in p ? p.defaultUnit?.symbol : (p as any).defaultUnitSymbol;
 
-  const addProduct = (p: Product) => {
-    if (!p.defaultUnitId) {
+    if (!unitId) {
       toast({ title: 'Product has no default unit', variant: 'error' });
       return;
     }
@@ -81,11 +127,11 @@ export default function NewInvoicePage() {
     const newItem: LineItem = {
       ...EMPTY_ITEM,
       productId: p.id,
-      unitId: p.defaultUnitId,
+      unitId: unitId,
       unitPrice: mrp,
       productName: p.name,
       productSku: p.skuCode,
-      unitSymbol: p.defaultUnit?.symbol ?? '',
+      unitSymbol: unitSymbol ?? '',
       isBatchTracked: !!p.isBatchTracked,
       rowKey: p.id + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
     };
@@ -211,7 +257,6 @@ export default function NewInvoicePage() {
   const onScanned = async (code: string) => {
     setScanOpen(false);
     setProductSearch(code);
-    setDebouncedProductSearch(code);
   };
 
   return (
@@ -376,7 +421,7 @@ export default function NewInvoicePage() {
                   onChange={(e) => setRetailerId(e.target.value)}
                 >
                   <option value="">— Cash / walk-in —</option>
-                  {(retailersQ.data ?? []).map((r: Retailer) => (
+                  {(retailersQ.data?.items ?? []).map((r: RetailerOption | LocalRetailer) => (
                     <option key={r.id} value={r.id}>
                       {r.shopName} {r.ownerName ? `(${r.ownerName})` : ''}
                     </option>

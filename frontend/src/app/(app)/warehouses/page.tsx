@@ -9,6 +9,7 @@ import { Select } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table';
 import { Badge, statusVariant } from '@/components/ui/badge';
+import { Modal } from '@/components/ui/modal';
 import { organizationApi, Warehouse } from '@/lib/api/organization';
 import { api } from '@/lib/api/client';
 import { toast } from '@/components/ui/toaster';
@@ -98,37 +99,32 @@ function WarehouseForm({ onClose, onSuccess }: { onClose: () => void; onSuccess:
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md rounded-xl bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b px-6 py-4">
-          <h2 className="text-lg font-semibold">New Warehouse</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl">×</button>
-        </div>
-        <div className="space-y-4 px-6 py-4">
-          <Select
-            label="Branch"
-            value={form.branchId}
-            onChange={(e) => setForm((f) => ({ ...f, branchId: e.target.value }))}
-            required
-          >
-            <option value="">Select branch</option>
-            {(branchesQ.data?.items ?? []).map((b) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
-            ))}
-          </Select>
-          <Input label="Code" value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} placeholder="SURKHET-MAIN" required />
-          <Input label="Name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="Surkhet Main Warehouse" required />
-        </div>
-        <div className="flex justify-end gap-2 border-t px-6 py-4">
-          <Button variant="outline" onClick={onClose} disabled={createMut.isPending}>Cancel</Button>
-          <Button
-            onClick={() => createMut.mutate()}
-            disabled={createMut.isPending || !form.branchId || !form.code || !form.name}
-          >
-            {createMut.isPending ? <Spinner size="sm" /> : null} Create
-          </Button>
-        </div>
+    <Modal open={true} onClose={onClose} title="New Warehouse" footer={
+      <>
+        <Button variant="outline" onClick={onClose} disabled={createMut.isPending}>Cancel</Button>
+        <Button
+          onClick={() => createMut.mutate()}
+          disabled={createMut.isPending || !form.branchId || !form.code || !form.name}
+        >
+          {createMut.isPending ? <Spinner size="sm" /> : null} Create
+        </Button>
+      </>
+    }>
+      <div className="space-y-4">
+        <Select
+          label="Branch"
+          value={form.branchId}
+          onChange={(e) => setForm((f) => ({ ...f, branchId: e.target.value }))}
+          required
+        >
+          <option value="">Select branch</option>
+          {(branchesQ.data?.items ?? []).map((b) => (
+            <option key={b.id} value={b.id}>{b.name}</option>
+          ))}
+        </Select>
+        <Input label="Code" value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} placeholder="SURKHET-MAIN" required />
+        <Input label="Name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="Surkhet Main Warehouse" required />
       </div>
-    </div>
+    </Modal>
   );
 }

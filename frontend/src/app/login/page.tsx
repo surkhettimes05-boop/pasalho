@@ -1,20 +1,26 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { authApi } from '@/lib/api/auth';
-import { useAuthStore } from '@/lib/stores/auth-store';
+import { TOKEN_KEY, REFRESH_KEY, useAuthStore } from '@/lib/stores/auth-store';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { setSession } = useAuthStore();
+  const { token, user, _hasHydrated, setSession } = useAuthStore();
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (_hasHydrated && token && user) {
+      router.replace('/dashboard');
+    }
+  }, [_hasHydrated, token, user, router]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -22,13 +28,13 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       const result = await authApi.login({ login, password });
-      // Store both tokens immediately so the interceptor can refresh
+      // Store tokens before /me so the API client can authorize the profile request.
       if (typeof window !== 'undefined') {
-        localStorage.setItem('pasalo_token', result.accessToken);
-        localStorage.setItem('pasalo_refresh_token', result.refreshToken);
+        localStorage.setItem(TOKEN_KEY, result.accessToken);
+        localStorage.setItem(REFRESH_KEY, result.refreshToken);
       }
       const me = await authApi.me();
-      setSession(result.accessToken, me);
+      setSession(result.accessToken, me, result.refreshToken);
       router.replace('/dashboard');
     } catch (err: any) {
       setError(err?.message || 'Login failed');

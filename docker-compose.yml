@@ -14,12 +14,13 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pasalo"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-pasalo}"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - pasalo-network
+    restart: unless-stopped
 
   # Redis Cache
   redis:
@@ -34,6 +35,71 @@ services:
       retries: 5
     networks:
       - pasalo-network
+    restart: unless-stopped
+
+  # NestJS Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pasalo-backend
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-pasalo}:${DB_PASSWORD:-pasalo_dev}@postgres:5432/${DB_NAME:-pasalo_dev}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change-this-to-a-real-secret-in-production}
+      JWT_EXPIRATION: ${JWT_EXPIRATION:-24h}
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3000
+      API_PREFIX: api
+      API_VERSION: v1
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - pasalo-network
+    restart: unless-stopped
+    command: >
+      sh -c "npx prisma migrate deploy && node dist/main.js"
+
+  # Next.js Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: pasalo-frontend
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost/api/v1}
+      NEXT_PUBLIC_APP_NAME: PASALO OS
+      NEXT_PUBLIC_JWT_TOKEN_KEY: ${NEXT_PUBLIC_JWT_TOKEN_KEY:-pasalo_jwt_token}
+      NEXT_PUBLIC_PWA_ENABLED: ${NEXT_PUBLIC_PWA_ENABLED:-true}
+      PORT: 3001
+    ports:
+      - "3001:3001"
+    depends_on:
+      - backend
+    networks:
+      - pasalo-network
+    restart: unless-stopped
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: pasalo-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./infra/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - pasalo-network
+    restart: unless-stopped
 
 volumes:
   postgres_data:

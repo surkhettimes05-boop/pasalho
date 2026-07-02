@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table';
 import { Badge, statusVariant } from '@/components/ui/badge';
+import { Modal } from '@/components/ui/modal';
 import { organizationApi, Branch } from '@/lib/api/organization';
 import { api } from '@/lib/api/client';
 import { toast } from '@/components/ui/toaster';
@@ -101,32 +102,27 @@ function BranchForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: ()
     setForm((prev) => ({ ...prev, [key]: e.target.value }));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-xl bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b px-6 py-4">
-          <h2 className="text-lg font-semibold">New Branch</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl">×</button>
-        </div>
-        <div className="grid grid-cols-2 gap-4 px-6 py-4">
-          <Input label="Code" value={form.code} onChange={f('code')} placeholder="SURKHET" required />
-          <Input label="Name" value={form.name} onChange={f('name')} placeholder="Surkhet Branch" required />
-          <Input label="City" value={form.city} onChange={f('city')} required />
-          <Input label="District" value={form.district} onChange={f('district')} required />
-          <Input label="Region" value={form.region} onChange={f('region')} />
-          <Input label="Phone" value={form.phone} onChange={f('phone')} />
-          <Input label="Email" value={form.email} onChange={f('email')} />
-          <Input label="Contact Person" value={form.contactPerson} onChange={f('contactPerson')} />
-        </div>
-        <div className="flex justify-end gap-2 border-t px-6 py-4">
-          <Button variant="outline" onClick={onClose} disabled={createMut.isPending}>Cancel</Button>
-          <Button
-            onClick={() => createMut.mutate()}
-            disabled={createMut.isPending || !form.code || !form.name || !form.city || !form.district}
-          >
-            {createMut.isPending ? <Spinner size="sm" /> : null} Create
-          </Button>
-        </div>
+    <Modal open={true} onClose={onClose} title="New Branch" size="lg" footer={
+      <>
+        <Button variant="outline" onClick={onClose} disabled={createMut.isPending}>Cancel</Button>
+        <Button
+          onClick={() => createMut.mutate()}
+          disabled={createMut.isPending || !form.code || !form.name || !form.city || !form.district}
+        >
+          {createMut.isPending ? <Spinner size="sm" /> : null} Create
+        </Button>
+      </>
+    }>
+      <div className="grid grid-cols-2 gap-4">
+        <Input label="Code" value={form.code} onChange={f('code')} placeholder="SURKHET" required />
+        <Input label="Name" value={form.name} onChange={f('name')} placeholder="Surkhet Branch" required />
+        <Input label="City" value={form.city} onChange={f('city')} required />
+        <Input label="District" value={form.district} onChange={f('district')} required />
+        <Input label="Region" value={form.region} onChange={f('region')} />
+        <Input label="Phone" value={form.phone} onChange={f('phone')} />
+        <Input label="Email" value={form.email} onChange={f('email')} />
+        <Input label="Contact Person" value={form.contactPerson} onChange={f('contactPerson')} />
       </div>
-    </div>
+    </Modal>
   );
 }

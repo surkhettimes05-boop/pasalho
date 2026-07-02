@@ -2,7 +2,10 @@ import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/co
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { InventoryLedgerService } from './services/inventory-ledger.service';
 import { StockAdjustmentService } from './services/stock-adjustment.service';
+import { InventorySnapshotService } from './services/inventory-snapshot.service';
+import { StockReservationService } from './services/stock-reservation.service';
 import { CreateStockAdjustmentDto } from './dto/create-stock-adjustment.dto';
+import { ReserveStockDto, ReleaseStockDto } from './dto/stock-reservation.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/permissions.guard';
@@ -18,15 +21,76 @@ export class InventoryController {
   constructor(
     private readonly ledger: InventoryLedgerService,
     private readonly adjustmentService: StockAdjustmentService,
+    private readonly snapshotService: InventorySnapshotService,
+    private readonly reservationService: StockReservationService,
   ) {}
+
+  // ── Snapshots (enhanced) ──────────────────────────────────────────────────────
 
   @Get('snapshots')
   @RequirePermissions('inventory.view')
-  @ApiOperation({ summary: 'Get inventory snapshots by location' })
-  @ApiQuery({ name: 'locationId', required: true })
-  getSnapshots(@Query() pagination: PaginationDto, @Query('locationId') locationId: string) {
-    return this.ledger.getSnapshots(locationId, { skip: pagination.skip, take: pagination.limit });
+  @ApiOperation({ summary: 'List inventory snapshots with filters' })
+  @ApiQuery({ name: 'locationId', required: false })
+  @ApiQuery({ name: 'branchId', required: false })
+  @ApiQuery({ name: 'productId', required: false })
+  @ApiQuery({ name: 'lowStock', required: false, type: Boolean })
+  @ApiQuery({ name: 'lowStockThreshold', required: false, type: Number })
+  @ApiQuery({ name: 'search', required: false })
+  getSnapshots(
+    @Query() pagination: PaginationDto,
+    @Query('locationId') locationId?: string,
+    @Query('branchId') branchId?: string,
+    @Query('productId') productId?: string,
+    @Query('lowStock') lowStock?: string,
+    @Query('lowStockThreshold') lowStockThreshold?: string,
+    @Query('search') search?: string,
+  ) {
+    const lowStockBool = lowStock === 'true';
+    const threshold = lowStockThreshold ? Number(lowStockThreshold) : undefined;
+    return this.snapshotService.listSnapshots(
+      { locationId, branchId, productId, lowStock: lowStockBool, lowStockThreshold: threshold, search },
+      pagination,
+    );
   }
+
+  @Get('snapshots/summary')
+  @RequirePermissions('inventory.view')
+  @ApiOperation({ summary: 'Stock summary (total SKUs, low stock, out of stock)' })
+  @ApiQuery({ name: 'branchId', required: false })
+  @ApiQuery({ name: 'locationId', required: false })
+  getStockSummary(
+    @Query('branchId') branchId?: string,
+    @Query('locationId') locationId?: string,
+  ) {
+    return this.snapshotService.getStockSummary(branchId, locationId);
+  }
+
+  @Get('snapshots/:id')
+  @RequirePermissions('inventory.view')
+  @ApiOperation({ summary: 'Get snapshot by ID' })
+  getSnapshot(@Param('id') id: string) {
+    return this.snapshotService.findById(id);
+  }
+
+  @Get('products/:productId/stock')
+  @RequirePermissions('inventory.view')
+  @ApiOperation({ summary: 'Get stock for a product across locations' })
+  @ApiQuery({ name: 'branchId', required: false })
+  getProductStock(
+    @Param('productId') productId: string,
+    @Query('branchId') branchId?: string,
+  ) {
+    return this.snapshotService.getStockByProduct(productId, branchId);
+  }
+
+  @Get('locations/:id/stock')
+  @RequirePermissions('inventory.view')
+  @ApiOperation({ summary: 'Get stock for a specific location (flat)' })
+  getLocationStock(@Param('id') locationId: string) {
+    return this.snapshotService.getLocationStockFlat(locationId);
+  }
+
+  // ── Movements ────────────────────────────────────────────────────────────────
 
   @Get('movements')
   @RequirePermissions('inventory.view')
@@ -43,14 +107,48 @@ export class InventoryController {
     return this.ledger.getMovements({ branchId, productId, locationId }, { skip: pagination.skip, take: pagination.limit });
   }
 
-  @Get('locations/:id/stock')
+  // ── Reservations ──────────────────────────────────────────────────────────────
+
+  @Get('reservations')
   @RequirePermissions('inventory.view')
-  @ApiOperation({ summary: 'Get stock for a specific location' })
-  getLocationStock(@Param('id') locationId: string, @Query() pagination: PaginationDto) {
-    return this.ledger.getSnapshots(locationId, { skip: pagination.skip, take: pagination.limit });
+  @ApiOperation({ summary: 'List stock reservations' })
+  @ApiQuery({ name: 'branchId', required: false })
+  @ApiQuery({ name: 'locationId', required: false })
+  @ApiQuery({ name: 'productId', required: false })
+  listReservations(
+    @Query() pagination: PaginationDto,
+    @Query('branchId') branchId?: string,
+    @Query('locationId') locationId?: string,
+    @Query('productId') productId?: string,
+  ) {
+    return this.reservationService.listReservations(
+      { branchId, locationId, productId },
+      { skip: pagination.skip, take: pagination.limit },
+    );
+  }
+
+  @Post('reservations/reserve')
+  @RequirePermissions('inventory.reserve')
+  @ApiOperation({ summary: 'Reserve stock for a pending operation' })
+  reserveStock(@Body() dto: ReserveStockDto, @CurrentUser() actor: User) {
+    return this.reservationService.reserveStock({
+      ...dto,
+      createdById: actor.id,
+    });
+  }
+
+  @Post('reservations/release')
+  @RequirePermissions('inventory.reserve')
+  @ApiOperation({ summary: 'Release reserved stock back to available' })
+  releaseStock(@Body() dto: ReleaseStockDto, @CurrentUser() actor: User) {
+    return this.reservationService.releaseStock({
+      ...dto,
+      createdById: actor.id,
+    });
   }
 
   // ── Adjustments ──────────────────────────────────────────────────────────────
+
   @Get('adjustments')
   @RequirePermissions('inventory.view')
   @ApiOperation({ summary: 'List stock adjustments' })

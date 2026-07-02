@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PrismaService } from '../database/prisma.service';
+import { AuthService } from './auth.service';
 import { JwtPayload } from './jwt.payload';
 import { AppError } from '../common/errors/app-error';
 import { ErrorCodes } from '../common/errors/error-codes';
@@ -11,7 +12,8 @@ import { ErrorCodes } from '../common/errors/error-codes';
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     config: ConfigService,
-    private readonly prisma: PrismaService,
+    private readonly authService: AuthService,
+    private readonly prisma: PrismaService, // kept just in case, though we could query user status
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -21,20 +23,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload) {
-    const session = await this.prisma.session.findFirst({
-      where: {
-        id: payload.sessionId,
-        revokedAt: null,
-        expiresAt: { gt: new Date() },
-      },
-      select: {
-        id: true,
-        userId: true,
-        user: { select: { status: true } },
-      },
-    });
-
-    if (!session || session.user.status !== 'ACTIVE') {
+    const isValid = await this.authService.validateSession(payload.sessionId);
+    if (!isValid) {
+      throw new AppError(ErrorCodes.AUTH_REQUIRED, 'Session expired or invalid.', 401);
+    }
+    
+    // Check if user is active (could also be cached in Redis)
+    const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, select: { status: true } });
+    if (!user || user.status !== 'ACTIVE') {
       throw new AppError(ErrorCodes.AUTH_REQUIRED, 'Session expired or user inactive.', 401);
     }
 

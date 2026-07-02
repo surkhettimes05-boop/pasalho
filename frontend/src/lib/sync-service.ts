@@ -33,7 +33,7 @@ export class SyncService {
           code: r.code,
           shopName: r.shopName,
           ownerName: r.ownerName,
-          address: r.address,
+          address: r.address ?? null,
           updatedAt: r.updatedAt,
         })));
       });
