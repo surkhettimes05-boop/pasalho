@@ -9,7 +9,7 @@ import { Badge, statusVariant } from '@/components/ui/badge';
 import { Select } from '@/components/ui/select';
 import { formatDate, formatCurrency } from '@/lib/utils/cn';
 import { retailerApi } from '@/lib/api/retailer-portal';
-import { useRetailerAuth } from '../layout';
+import { useRetailerAuth } from '../auth-context';
 
 const PAYMENT_STATUS_OPTIONS = [
   { value: '', label: 'All Statuses' },

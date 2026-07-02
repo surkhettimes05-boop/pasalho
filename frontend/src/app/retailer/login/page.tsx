@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { retailerAuthApi, RETAILER_TOKEN_KEY } from '@/lib/api/retailer-portal';
-import { useRetailerAuth } from '../layout';
+import { useRetailerAuth } from '../auth-context';
 
 export default function RetailerLoginPage() {
   const router = useRouter();

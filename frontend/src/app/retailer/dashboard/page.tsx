@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { formatCurrency, formatNumber } from '@/lib/utils/cn';
-import { useRetailerAuth } from '../layout';
+import { useRetailerAuth } from '../auth-context';
 import { retailerOrderApi, retailerNotificationApi, retailerRecommendationApi, ReorderSuggestion } from '@/lib/api/retailer-portal';
 
 export default function RetailerDashboardPage() {

@@ -10,21 +10,7 @@ import { RETAILER_TOKEN_KEY, retailerAuthApi, RetailerProfile } from '@/lib/api/
 
 const RETAILER_PROFILE_KEY = 'pasalo_retailer_profile';
 
-interface RetailerAuthContextType {
-  profile: RetailerProfile | null;
-  token: string | null;
-  setAuth: (token: string, profile: RetailerProfile) => void;
-  clearAuth: () => void;
-}
-
-const RetailerAuthContext = createContext<RetailerAuthContextType>({
-  profile: null,
-  token: null,
-  setAuth: () => {},
-  clearAuth: () => {},
-});
-
-export const useRetailerAuth = () => useContext(RetailerAuthContext);
+import { RetailerAuthContext } from './auth-context';
 
 const publicPaths = ['/retailer/login', '/retailer/set-pin'];
 

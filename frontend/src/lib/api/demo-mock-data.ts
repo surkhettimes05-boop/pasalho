@@ -420,10 +420,10 @@ function getInitialDb(): MockDb {
     },
   ];
 
-  const stockAdjustments = [];
-  const stockTransfers = [];
-  const stockCounts = [];
-  const damageReports = [];
+  const stockAdjustments: any[] = [];
+  const stockTransfers: any[] = [];
+  const stockCounts: any[] = [];
+  const damageReports: any[] = [];
   const expiryEvents = [
     {
       id: 'exp-1',

@@ -6,7 +6,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Badge } from '@/components/ui/badge';
 import { formatDate, formatCurrency } from '@/lib/utils/cn';
 import { retailerApi } from '@/lib/api/retailer-portal';
-import { useRetailerAuth } from '../layout';
+import { useRetailerAuth } from '../auth-context';
 
 export default function RetailerPaymentsPage() {
   const { profile } = useRetailerAuth();
