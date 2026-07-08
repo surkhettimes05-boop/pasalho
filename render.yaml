@@ -2,6 +2,7 @@ services:
   - type: web
     name: pasalo-api
     env: node
+    plan: free
     rootDir: backend
     buildCommand: npm install && npx prisma generate && npm run build
     startCommand: npx prisma migrate deploy && npm run start:prod
@@ -26,3 +27,4 @@ databases:
   - name: pasalo-db
     databaseName: pasalo
     user: pasalo
+    plan: free
