@@ -3,6 +3,8 @@ import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { AuditInterceptor } from './audit/audit.interceptor';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './auth/auth.module';
 import { IdentityModule } from './identity/identity.module';
@@ -63,6 +65,10 @@ import { appConfigSchema } from './config/app.config';
     DeliveryModule,
     NotificationModule,
     RetailerPortalModule,
+    ServeStaticModule.forRoot({
+      rootPath: join(__dirname, '..', 'public'),
+      serveRoot: '/', // Serves files from public/uploads at /uploads/...
+    }),
   ],
   controllers: [],
   providers: [

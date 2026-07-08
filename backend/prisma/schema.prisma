@@ -187,7 +187,15 @@ enum SalesOrderStatus {
   DRAFT
   CONFIRMED
   INVOICED
+  PLACED
+  PACKED
+  DELIVERED
   CANCELLED
+}
+
+enum OrderSource {
+  STOREFRONT
+  DNP
 }
 
 enum DeliveryStatus {
@@ -591,6 +599,10 @@ model Product {
   isExpiryTracked Boolean   @default(false)
   costPrice       Decimal?  @db.Decimal(18, 4)
   mrp             Decimal?  @db.Decimal(18, 4)
+  sellingPrice    Decimal?  @db.Decimal(18, 4)
+  stock           Int       @default(0)
+  imageUrl        String?
+  storefrontCategory String?
   isActive        Boolean   @default(true)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -1215,26 +1227,27 @@ model RouteStop {
 model SalesOrder {
   id          String           @id @default(uuid())
   orderNo     String           @unique
-  branchId    String
+  source      OrderSource      @default(DNP)
+  branchId    String?
   salesRepId  String?
   routeId     String?
-  retailerId  String
+  retailerId  String?
   status      SalesOrderStatus @default(DRAFT)
   notes       String?
   subtotal    Decimal          @default(0) @db.Decimal(18, 4)
   grandTotal  Decimal          @default(0) @db.Decimal(18, 4)
   invoiceId   String?          @unique
-  createdById String?
+  createdById String
   confirmedAt DateTime?
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
 
-  branch    Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  branch    Branch?    @relation(fields: [branchId], references: [id], onDelete: Restrict)
   salesRep  SalesRep?  @relation(fields: [salesRepId], references: [id], onDelete: SetNull)
   route     Route?     @relation(fields: [routeId], references: [id], onDelete: SetNull)
-  retailer  Retailer   @relation(fields: [retailerId], references: [id], onDelete: Restrict)
+  retailer  Retailer?  @relation(fields: [retailerId], references: [id], onDelete: Restrict)
   invoice   Invoice?   @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  createdBy User?      @relation("SalesOrderCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy User       @relation("SalesOrderCreator", fields: [createdById], references: [id], onDelete: Restrict)
   items     SalesOrderItem[]
 
   @@index([branchId])

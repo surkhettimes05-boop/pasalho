@@ -78,6 +78,33 @@ export class CreateProductDto {
   @IsNumber()
   mrp?: number;
 
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  sellingPrice?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  stock?: number = 0;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  imageUrl?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  storefrontCategory?: string;
+
+  @ApiPropertyOptional({ default: true })
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean = true;
+
   @ApiPropertyOptional({ type: [ProductUnitDto] })
   @IsOptional()
   @ValidateNested({ each: true })

@@ -213,6 +213,52 @@ export class CatalogService {
     return updated;
   }
 
+  async deleteProduct(id: string, actorUserId: string) {
+    const existing = await this.prisma.product.findFirst({ where: { id, deletedAt: null } });
+    if (!existing) throw new AppError(ErrorCodes.NOT_FOUND, 'Product not found.', 404);
+
+    const deleted = await this.prisma.product.update({ 
+      where: { id }, 
+      data: { deletedAt: new Date(), isActive: false } 
+    });
+
+    await this.audit.record({
+      actorUserId,
+      action: 'PRODUCT_UPDATED', // using UPDATED since there's no PRODUCT_DELETED in enum
+      entityType: 'PRODUCT',
+      entityId: id,
+      beforeData: { isActive: existing.isActive, deletedAt: null },
+      afterData: { isActive: false, deletedAt: deleted.deletedAt.toISOString() } as Prisma.InputJsonValue,
+    });
+
+    return deleted;
+  }
+
+  async adjustStock(id: string, delta: number, actorUserId: string) {
+    const existing = await this.prisma.product.findFirst({ where: { id, deletedAt: null } });
+    if (!existing) throw new AppError(ErrorCodes.NOT_FOUND, 'Product not found.', 404);
+
+    const newStock = Math.max(0, existing.stock + delta);
+    const actualDelta = newStock - existing.stock;
+
+    const updated = await this.prisma.product.update({
+      where: { id },
+      data: { stock: newStock },
+    });
+
+    await this.audit.record({
+      actorUserId,
+      action: 'PRODUCT_UPDATED',
+      entityType: 'PRODUCT',
+      entityId: id,
+      beforeData: { stock: existing.stock },
+      afterData: { stock: updated.stock },
+      reason: `Stock adjustment: ${actualDelta > 0 ? '+' : ''}${actualDelta}`,
+    });
+
+    return updated;
+  }
+
   // ── Batches ──────────────────────────────────────────────────────────────────
 
   async listBatches(pagination: PaginationDto, productId?: string) {

@@ -5,9 +5,16 @@ import {
   Param,
   Patch,
   Post,
+  Delete,
   Query,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { extname } from 'path';
+import { v4 as uuidv4 } from 'uuid';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -28,6 +35,8 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { Public } from '../auth/decorators/public.decorator';
+import { cloudinaryStorage } from '../config/cloudinary.config';
 
 @ApiTags('catalog')
 @ApiBearerAuth()
@@ -39,6 +48,7 @@ export class CatalogController {
   // ── Categories ───────────────────────────────────────────────────────────────
 
   @Get('categories')
+  @Public()
   @RequirePermissions('products.view')
   @ApiOperation({ summary: 'List categories' })
   listCategories(@Query() pagination: PaginationDto) {
@@ -55,6 +65,7 @@ export class CatalogController {
   // ── Brands ───────────────────────────────────────────────────────────────────
 
   @Get('brands')
+  @Public()
   @RequirePermissions('products.view')
   @ApiOperation({ summary: 'List brands' })
   listBrands(@Query() pagination: PaginationDto) {
@@ -87,6 +98,7 @@ export class CatalogController {
   // ── Products ──────────────────────────────────────────────────────────────────
 
   @Get('products')
+  @Public()
   @RequirePermissions('products.view')
   @ApiOperation({ summary: 'List products' })
   @ApiQuery({ name: 'categoryId', required: false })
@@ -106,7 +118,24 @@ export class CatalogController {
     return this.catalogService.createProduct(dto, actor.id);
   }
 
+  @Post('upload')
+  @RequirePermissions('products.create')
+  @ApiOperation({ summary: 'Upload product image' })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: cloudinaryStorage,
+    }),
+  )
+  uploadProductImage(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new Error('No file uploaded');
+    }
+    // multer-storage-cloudinary provides the URL in file.path
+    return { imageUrl: file.path };
+  }
+
   @Get('products/:id')
+  @Public()
   @RequirePermissions('products.view')
   @ApiOperation({ summary: 'Get product by ID' })
   findProduct(@Param('id') id: string) {
@@ -122,6 +151,27 @@ export class CatalogController {
     @CurrentUser() actor: User,
   ) {
     return this.catalogService.updateProduct(id, dto, actor.id);
+  }
+
+  @Delete('products/:id')
+  @RequirePermissions('products.create')
+  @ApiOperation({ summary: 'Delete product' })
+  deleteProduct(
+    @Param('id') id: string,
+    @CurrentUser() actor: User,
+  ) {
+    return this.catalogService.deleteProduct(id, actor.id);
+  }
+
+  @Patch('products/:id/stock')
+  @RequirePermissions('products.create')
+  @ApiOperation({ summary: 'Adjust product stock' })
+  adjustStock(
+    @Param('id') id: string,
+    @Body('delta') delta: number,
+    @CurrentUser() actor: User,
+  ) {
+    return this.catalogService.adjustStock(id, delta, actor.id);
   }
 
   // ── Batches ───────────────────────────────────────────────────────────────────
@@ -165,6 +215,7 @@ export class CatalogController {
   // ── Barcode lookup ────────────────────────────────────────────────────────────
 
   @Get('barcodes/:barcode')
+  @Public()
   @RequirePermissions('products.view')
   @ApiOperation({ summary: 'Look up product by barcode' })
   lookupBarcode(@Param('barcode') barcode: string) {

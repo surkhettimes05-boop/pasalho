@@ -6,6 +6,7 @@ import { AppError } from '../common/errors/app-error';
 import { ErrorCodes } from '../common/errors/error-codes';
 import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
 import { ConvertToInvoiceDto } from './dto/convert-to-invoice.dto';
+import { PublicCheckoutDto } from './dto/public-checkout.dto';
 import { InvoiceService } from '../sales/invoice.service';
 
 @Injectable()
@@ -16,11 +17,12 @@ export class SalesOrderService {
     private readonly invoiceService: InvoiceService,
   ) {}
 
-  async list(pagination: PaginationDto, branchId?: string, salesRepId?: string, status?: string) {
+  async list(pagination: PaginationDto, branchId?: string, salesRepId?: string, status?: string, source?: string) {
     const where: any = {};
     if (branchId) where.branchId = branchId;
     if (salesRepId) where.salesRepId = salesRepId;
     if (status) where.status = status;
+    if (source) where.source = source;
     if (pagination.search) {
       where.orderNo = { contains: pagination.search, mode: 'insensitive' };
     }
@@ -115,8 +117,106 @@ export class SalesOrderService {
       action: 'SALES_ORDER_CREATED',
       entityType: 'SALES_ORDER',
       entityId: order.id,
-      branchId: dto.branchId,
+      branchId: dto.branchId ?? undefined,
       afterData: { orderNo, grandTotal: subtotal },
+    });
+
+    return this.findById(order.id);
+  }
+
+  async createPublicOrder(dto: PublicCheckoutDto) {
+    const SYSTEM_USER_ID = '99999999-9999-4999-a999-999999999999';
+    const orderNo = `ORD-${Date.now()}`;
+    const fiveMinsAgo = new Date(Date.now() - 5 * 60 * 1000);
+
+    const customerInfoStr = JSON.stringify({
+      name: `${dto.firstName} ${dto.lastName}`,
+      phone: dto.phone,
+      address: dto.address,
+    });
+
+    // 1. Validate Products & Recalculate Subtotal & Check Stock
+    let subtotal = 0;
+    const validatedItems = [];
+
+    for (const item of dto.items) {
+      const product = await this.prisma.product.findUnique({
+        where: { id: item.productId, isActive: true },
+        include: { defaultUnit: true }
+      });
+
+      if (!product) {
+        throw new AppError(ErrorCodes.NOT_FOUND, `Product not found or inactive: ${item.productId}`, 404);
+      }
+
+      if (product.stock < item.quantity) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, `Insufficient stock for ${product.name}. Available: ${product.stock}`, 422);
+      }
+
+      const unitPrice = Number(product.sellingPrice || product.mrp || 0);
+      subtotal += item.quantity * unitPrice;
+
+      validatedItems.push({
+        productId: product.id,
+        unitId: product.defaultUnitId,
+        quantity: item.quantity,
+        baseQuantity: item.quantity, // Simplified for storefront
+        unitPrice: unitPrice,
+        lineTotal: item.quantity * unitPrice,
+      });
+    }
+
+    // 2. Idempotency Check: Exact same phone AND exact same total within last 5 mins
+    const duplicate = await this.prisma.salesOrder.findFirst({
+      where: {
+        source: 'STOREFRONT',
+        createdAt: { gte: fiveMinsAgo },
+        notes: { contains: `"phone":"${dto.phone}"` },
+        grandTotal: subtotal
+      }
+    });
+
+    if (duplicate) {
+      throw new AppError(ErrorCodes.CONFLICT, 'An identical order was already placed recently. Please wait a few minutes or check your order history.', 409);
+    }
+
+    // 3. Save Order inside a transaction
+    const order = await this.prisma.$transaction(async (tx) => {
+      const o = await tx.salesOrder.create({
+        data: {
+          orderNo,
+          source: 'STOREFRONT',
+          status: 'PLACED',
+          notes: customerInfoStr,
+          subtotal,
+          grandTotal: subtotal,
+          createdById: SYSTEM_USER_ID,
+        },
+      });
+
+      for (const item of validatedItems) {
+        await tx.salesOrderItem.create({
+          data: {
+            salesOrderId: o.id,
+            productId: item.productId,
+            unitId: item.unitId,
+            quantity: item.quantity,
+            baseQuantity: item.baseQuantity,
+            unitPrice: item.unitPrice,
+            lineTotal: item.lineTotal,
+          },
+        });
+      }
+
+      return o;
+    });
+
+    await this.audit.record({
+      actorUserId: SYSTEM_USER_ID,
+      action: 'SALES_ORDER_CREATED',
+      entityType: 'SALES_ORDER',
+      entityId: order.id,
+      afterData: { orderNo, grandTotal: subtotal, source: 'STOREFRONT' },
     });
 
     return this.findById(order.id);
@@ -138,8 +238,41 @@ export class SalesOrderService {
       action: 'SALES_ORDER_CONFIRMED',
       entityType: 'SALES_ORDER',
       entityId: id,
-      branchId: order.branchId,
+      branchId: order.branchId ?? undefined,
       afterData: { status: 'CONFIRMED' },
+    });
+
+    return this.findById(id);
+  }
+
+  async updateStatus(id: string, status: 'PACKED' | 'DELIVERED', actorUserId: string) {
+    const order = await this.findById(id);
+    if (order.source !== 'STOREFRONT') {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Only STOREFRONT orders can be progressed via this endpoint.', 422);
+    }
+
+    const validTransitions = {
+      'PLACED': ['PACKED', 'CANCELLED'],
+      'PACKED': ['DELIVERED', 'CANCELLED'],
+    };
+
+    const allowed = validTransitions[order.status] || [];
+    if (!allowed.includes(status)) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, `Cannot transition order from ${order.status} to ${status}.`, 422);
+    }
+
+    await this.prisma.salesOrder.update({
+      where: { id },
+      data: { status },
+    });
+
+    await this.audit.record({
+      actorUserId,
+      action: 'SALES_ORDER_CONFIRMED', // Using existing audit action for simplicity
+      entityType: 'SALES_ORDER',
+      entityId: id,
+      branchId: order.branchId ?? undefined,
+      afterData: { status },
     });
 
     return this.findById(id);
@@ -147,7 +280,7 @@ export class SalesOrderService {
 
   async cancel(id: string, actorUserId: string) {
     const order = await this.findById(id);
-    if (!['DRAFT', 'CONFIRMED'].includes(order.status)) {
+    if (!['DRAFT', 'CONFIRMED', 'PLACED', 'PACKED'].includes(order.status)) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Order cannot be cancelled in its current state.', 422);
     }
 
@@ -161,7 +294,7 @@ export class SalesOrderService {
       action: 'SALES_ORDER_CANCELLED',
       entityType: 'SALES_ORDER',
       entityId: id,
-      branchId: order.branchId,
+      branchId: order.branchId ?? undefined,
       afterData: { status: 'CANCELLED' },
     });
 
@@ -177,6 +310,10 @@ export class SalesOrderService {
 
     if (order.invoiceId) {
       throw new AppError(ErrorCodes.CONFLICT, 'Order has already been converted to an invoice.', 409);
+    }
+
+    if (!order.branchId || !order.retailerId) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Cannot convert a non-DNP order (missing branch or retailer) to an invoice.', 422);
     }
 
     // Create invoice from order
@@ -211,7 +348,7 @@ export class SalesOrderService {
       action: 'SALES_ORDER_INVOICED',
       entityType: 'SALES_ORDER',
       entityId: id,
-      branchId: order.branchId,
+      branchId: order.branchId ?? undefined,
       afterData: { status: 'INVOICED', invoiceId: invoice.id, invoiceNumber: invoice.invoiceNumber },
     });
 
