@@ -39,12 +39,12 @@ export class StockReservationService {
    * Moves `baseQuantity` from AVAILABLE to RESERVED state within the same location.
    * This is done inside a transaction with snapshot row locking to prevent oversell.
    */
-  async reserveStock(input: ReserveStockInput) {
+  async reserveStock(input: ReserveStockInput, transaction?: Prisma.TransactionClient, recordAudit = true) {
     if (input.baseQuantity <= 0) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Reserve quantity must be positive.', 422);
     }
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    const reserve = async (tx: Prisma.TransactionClient) => {
       // 1. Validate and lock the AVAILABLE snapshot row
       const availableSnapshots = await tx.$queryRaw<
         Array<{ id: string; base_quantity: string; quantity: string; unitId: string }>
@@ -173,16 +173,19 @@ export class StockReservationService {
       });
 
       return { eventId: event.id, reservedBaseQty: input.baseQuantity };
-    });
+    };
+    const result = transaction ? await reserve(transaction) : await this.prisma.$transaction(reserve);
 
-    await this.audit.record({
-      actorUserId: input.createdById,
-      action: 'STOCK_ADJUSTMENT_POSTED' as any,
-      entityType: 'PRODUCT',
-      entityId: input.productId,
-      branchId: input.branchId,
-      afterData: { action: 'reserve', productId: input.productId, quantity: input.baseQuantity },
-    });
+    if (recordAudit) {
+      await this.audit.record({
+        actorUserId: input.createdById,
+        action: 'STOCK_ADJUSTMENT_POSTED' as any,
+        entityType: 'PRODUCT',
+        entityId: input.productId,
+        branchId: input.branchId,
+        afterData: { action: 'reserve', productId: input.productId, quantity: input.baseQuantity },
+      });
+    }
 
     return result;
   }

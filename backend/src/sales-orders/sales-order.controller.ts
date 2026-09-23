@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { SalesOrderService } from './sales-order.service';
 import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
@@ -53,8 +53,12 @@ export class SalesOrderController {
   @Post()
   @RequirePermissions('sales-orders.create')
   @ApiOperation({ summary: 'Create sales order' })
-  create(@Body() dto: CreateSalesOrderDto, @CurrentUser() actor: User) {
-    return this.salesOrderService.create(dto, actor.id);
+  create(
+    @Body() dto: CreateSalesOrderDto,
+    @CurrentUser() actor: User,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.salesOrderService.create(dto, actor.id, idempotencyKey);
   }
 
   @Post(':id/confirm')

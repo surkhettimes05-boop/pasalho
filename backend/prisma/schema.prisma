@@ -1234,7 +1234,10 @@ model SalesOrder {
   retailerId  String?
   status      SalesOrderStatus @default(DRAFT)
   notes       String?
+  idempotencyKey String?       @unique
   subtotal    Decimal          @default(0) @db.Decimal(18, 4)
+  discountTotal Decimal        @default(0) @db.Decimal(18, 4)
+  taxTotal    Decimal          @default(0) @db.Decimal(18, 4)
   grandTotal  Decimal          @default(0) @db.Decimal(18, 4)
   invoiceId   String?          @unique
   createdById String
@@ -1267,6 +1270,8 @@ model SalesOrderItem {
   quantity     Decimal @db.Decimal(18, 6)
   baseQuantity Decimal @db.Decimal(18, 6)
   unitPrice    Decimal @db.Decimal(18, 4)
+  discountAmount Decimal @default(0) @db.Decimal(18, 4)
+  taxAmount    Decimal @default(0) @db.Decimal(18, 4)
   lineTotal    Decimal @db.Decimal(18, 4)
   notes        String?
   createdAt    DateTime @default(now())

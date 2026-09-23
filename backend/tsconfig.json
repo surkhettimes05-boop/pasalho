@@ -15,6 +15,7 @@
     "strictNullChecks": false,
     "strict": false,
     "resolveJsonModule": true,
+    "isolatedModules": true,
     "paths": {
       "@/*": ["src/*"]
     }
