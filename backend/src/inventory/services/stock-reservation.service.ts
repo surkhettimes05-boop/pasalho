@@ -1,10 +1,10 @@
-import { Injectable } from '@nestjs/common';
-import { Prisma, StockState } from '@prisma/client';
-import { PrismaService } from '../../database/prisma.service';
-import { AuditLogService } from '../../audit/audit-log.service';
-import { InventoryLedgerService } from './inventory-ledger.service';
-import { AppError } from '../../common/errors/app-error';
-import { ErrorCodes } from '../../common/errors/error-codes';
+import { Injectable } from "@nestjs/common";
+import { Prisma, StockReservationStatus, StockState } from "@prisma/client";
+import { PrismaService } from "../../database/prisma.service";
+import { AuditLogService } from "../../audit/audit-log.service";
+import { InventoryLedgerService } from "./inventory-ledger.service";
+import { AppError } from "../../common/errors/app-error";
+import { ErrorCodes } from "../../common/errors/error-codes";
 
 export interface ReserveStockInput {
   branchId: string;
@@ -39,21 +39,34 @@ export class StockReservationService {
    * Moves `baseQuantity` from AVAILABLE to RESERVED state within the same location.
    * This is done inside a transaction with snapshot row locking to prevent oversell.
    */
-  async reserveStock(input: ReserveStockInput, transaction?: Prisma.TransactionClient, recordAudit = true) {
+  async reserveStock(
+    input: ReserveStockInput,
+    transaction?: Prisma.TransactionClient,
+    recordAudit = true,
+  ) {
     if (input.baseQuantity <= 0) {
-      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Reserve quantity must be positive.', 422);
+      throw new AppError(
+        ErrorCodes.VALIDATION_ERROR,
+        "Reserve quantity must be positive.",
+        422,
+      );
     }
 
     const reserve = async (tx: Prisma.TransactionClient) => {
       // 1. Validate and lock the AVAILABLE snapshot row
       const availableSnapshots = await tx.$queryRaw<
-        Array<{ id: string; base_quantity: string; quantity: string; unitId: string }>
+        Array<{
+          id: string;
+          base_quantity: string;
+          quantity: string;
+          unitId: string;
+        }>
       >`
-        SELECT id, base_quantity, quantity, "unitId"
+        SELECT id, "baseQuantity" AS base_quantity, quantity, "unitId"
         FROM "InventorySnapshot"
         WHERE "locationId" = ${input.locationId}
           AND "productId" = ${input.productId}
-          AND ("batchId" = ${input.batchId ?? null} OR ("batchId" IS NULL AND ${input.batchId ?? null} IS NULL))
+          AND "batchId" IS NOT DISTINCT FROM CAST(${input.batchId ?? null} AS TEXT)
           AND "stockState" = 'AVAILABLE'::"StockState"
           AND "unitId" = ${input.unitId}
         FOR UPDATE
@@ -70,8 +83,10 @@ export class StockReservationService {
 
       // 2. Deduct from AVAILABLE
       const newAvailBase = Number(available.base_quantity) - input.baseQuantity;
-      const ratio = Number(available.quantity) / Number(available.base_quantity);
-      const newAvailQty = Math.round((newAvailBase * ratio) * 1_000_000) / 1_000_000; // preserve precision
+      const ratio =
+        Number(available.quantity) / Number(available.base_quantity);
+      const newAvailQty =
+        Math.round(newAvailBase * ratio * 1_000_000) / 1_000_000; // preserve precision
 
       await tx.$executeRaw`
         UPDATE "InventorySnapshot"
@@ -83,11 +98,11 @@ export class StockReservationService {
       const reservedSnapshots = await tx.$queryRaw<
         Array<{ id: string; base_quantity: string; quantity: string }>
       >`
-        SELECT id, base_quantity, quantity
+        SELECT id, "baseQuantity" AS base_quantity, quantity
         FROM "InventorySnapshot"
         WHERE "locationId" = ${input.locationId}
           AND "productId" = ${input.productId}
-          AND ("batchId" = ${input.batchId ?? null} OR ("batchId" IS NULL AND ${input.batchId ?? null} IS NULL))
+          AND "batchId" IS NOT DISTINCT FROM CAST(${input.batchId ?? null} AS TEXT)
           AND "stockState" = 'RESERVED'::"StockState"
           AND "unitId" = ${input.unitId}
         FOR UPDATE
@@ -120,13 +135,13 @@ export class StockReservationService {
       // 4. Record the movement pair (AVAILABLE out, RESERVED in)
       const event = await tx.inventoryEvent.create({
         data: {
-          eventType: 'MANUAL_ADJUSTMENT',
-          eventStatus: 'POSTED',
+          eventType: "MANUAL_ADJUSTMENT",
+          eventStatus: "POSTED",
           branchId: input.branchId,
           referenceType: input.referenceType as any,
           referenceId: input.referenceId,
           createdById: input.createdById,
-          metadata: { action: 'RESERVE', reason: input.reason },
+          metadata: { action: "RESERVE", reason: input.reason },
         },
       });
 
@@ -142,12 +157,12 @@ export class StockReservationService {
           unitId: input.unitId,
           quantityDelta: -input.quantity,
           baseQuantityDelta: -input.baseQuantity,
-          movementType: 'ADJUSTMENT',
+          movementType: "ADJUSTMENT",
           referenceType: input.referenceType as any,
           referenceId: input.referenceId,
-          reasonCode: 'STOCK_RESERVED',
+          reasonCode: "STOCK_RESERVED",
           createdById: input.createdById,
-          metadata: { reservationAction: 'reserve' },
+          metadata: { reservationAction: "reserve" },
         },
       });
 
@@ -163,27 +178,33 @@ export class StockReservationService {
           unitId: input.unitId,
           quantityDelta: input.quantity,
           baseQuantityDelta: input.baseQuantity,
-          movementType: 'ADJUSTMENT',
+          movementType: "ADJUSTMENT",
           referenceType: input.referenceType as any,
           referenceId: input.referenceId,
-          reasonCode: 'STOCK_RESERVED',
+          reasonCode: "STOCK_RESERVED",
           createdById: input.createdById,
-          metadata: { reservationAction: 'reserve' },
+          metadata: { reservationAction: "reserve" },
         },
       });
 
       return { eventId: event.id, reservedBaseQty: input.baseQuantity };
     };
-    const result = transaction ? await reserve(transaction) : await this.prisma.$transaction(reserve);
+    const result = transaction
+      ? await reserve(transaction)
+      : await this.prisma.$transaction(reserve);
 
     if (recordAudit) {
       await this.audit.record({
         actorUserId: input.createdById,
-        action: 'STOCK_ADJUSTMENT_POSTED' as any,
-        entityType: 'PRODUCT',
+        action: "STOCK_ADJUSTMENT_POSTED" as any,
+        entityType: "PRODUCT",
         entityId: input.productId,
         branchId: input.branchId,
-        afterData: { action: 'reserve', productId: input.productId, quantity: input.baseQuantity },
+        afterData: {
+          action: "reserve",
+          productId: input.productId,
+          quantity: input.baseQuantity,
+        },
       });
     }
 
@@ -201,9 +222,17 @@ export class StockReservationService {
     const result = await this.prisma.$transaction(async (tx) => {
       // Find reserved snapshot entries that can be released
       const reservedSnapshots = await tx.$queryRaw<
-        Array<{ id: string; base_quantity: string; quantity: string; productId: string; batchId: string | null; unitId: string; locationId: string }>
+        Array<{
+          id: string;
+          base_quantity: string;
+          quantity: string;
+          productId: string;
+          batchId: string | null;
+          unitId: string;
+          locationId: string;
+        }>
       >`
-        SELECT id, base_quantity, quantity, "productId", "batchId", "unitId", "locationId"
+        SELECT id, "baseQuantity" AS base_quantity, quantity, "productId", "batchId", "unitId", "locationId"
         FROM "InventorySnapshot"
         WHERE "stockState" = 'RESERVED'::"StockState"
           AND "baseQuantity" > 0
@@ -223,21 +252,29 @@ export class StockReservationService {
    * Release specific reserved stock back to AVAILABLE.
    * This is the targeted version that knows exactly what to release.
    */
-  async releaseStock(input: ReserveStockInput) {
+  async releaseStock(
+    input: ReserveStockInput,
+    transaction?: Prisma.TransactionClient,
+    recordAudit = true,
+  ) {
     if (input.baseQuantity <= 0) {
-      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Release quantity must be positive.', 422);
+      throw new AppError(
+        ErrorCodes.VALIDATION_ERROR,
+        "Release quantity must be positive.",
+        422,
+      );
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const release = async (tx: Prisma.TransactionClient) => {
       // 1. Lock RESERVED snapshot
       const reservedSnapshots = await tx.$queryRaw<
         Array<{ id: string; base_quantity: string; quantity: string }>
       >`
-        SELECT id, base_quantity, quantity
+        SELECT id, "baseQuantity" AS base_quantity, quantity
         FROM "InventorySnapshot"
         WHERE "locationId" = ${input.locationId}
           AND "productId" = ${input.productId}
-          AND ("batchId" = ${input.batchId ?? null} OR ("batchId" IS NULL AND ${input.batchId ?? null} IS NULL))
+          AND "batchId" IS NOT DISTINCT FROM CAST(${input.batchId ?? null} AS TEXT)
           AND "stockState" = 'RESERVED'::"StockState"
           AND "unitId" = ${input.unitId}
         FOR UPDATE
@@ -254,10 +291,11 @@ export class StockReservationService {
 
       // 2. Subtract from RESERVED
       const newResBase = Number(reserved.base_quantity) - input.baseQuantity;
-      const ratio = Number(reserved.base_quantity) > 0
-        ? Number(reserved.quantity) / Number(reserved.base_quantity)
-        : 1;
-      const newResQty = Math.round((newResBase * ratio) * 1_000_000) / 1_000_000;
+      const ratio =
+        Number(reserved.base_quantity) > 0
+          ? Number(reserved.quantity) / Number(reserved.base_quantity)
+          : 1;
+      const newResQty = Math.round(newResBase * ratio * 1_000_000) / 1_000_000;
 
       if (newResBase <= 0) {
         // Delete the RESERVED snapshot row entirely
@@ -274,11 +312,11 @@ export class StockReservationService {
       const availableSnapshots = await tx.$queryRaw<
         Array<{ id: string; base_quantity: string; quantity: string }>
       >`
-        SELECT id, base_quantity, quantity
+        SELECT id, "baseQuantity" AS base_quantity, quantity
         FROM "InventorySnapshot"
         WHERE "locationId" = ${input.locationId}
           AND "productId" = ${input.productId}
-          AND ("batchId" = ${input.batchId ?? null} OR ("batchId" IS NULL AND ${input.batchId ?? null} IS NULL))
+          AND "batchId" IS NOT DISTINCT FROM CAST(${input.batchId ?? null} AS TEXT)
           AND "stockState" = 'AVAILABLE'::"StockState"
           AND "unitId" = ${input.unitId}
         FOR UPDATE
@@ -286,7 +324,8 @@ export class StockReservationService {
 
       const available = availableSnapshots[0];
       if (available) {
-        const newAvailBase = Number(available.base_quantity) + input.baseQuantity;
+        const newAvailBase =
+          Number(available.base_quantity) + input.baseQuantity;
         const newAvailQty = Number(available.quantity) + input.quantity;
 
         await tx.$executeRaw`
@@ -311,13 +350,13 @@ export class StockReservationService {
       // 4. Record movement pair (RESERVED out, AVAILABLE in)
       const event = await tx.inventoryEvent.create({
         data: {
-          eventType: 'MANUAL_ADJUSTMENT',
-          eventStatus: 'POSTED',
+          eventType: "MANUAL_ADJUSTMENT",
+          eventStatus: "POSTED",
           branchId: input.branchId,
           referenceType: input.referenceType as any,
           referenceId: input.referenceId,
           createdById: input.createdById,
-          metadata: { action: 'RELEASE_RESERVATION', reason: input.reason },
+          metadata: { action: "RELEASE_RESERVATION", reason: input.reason },
         },
       });
 
@@ -333,12 +372,12 @@ export class StockReservationService {
           unitId: input.unitId,
           quantityDelta: -input.quantity,
           baseQuantityDelta: -input.baseQuantity,
-          movementType: 'ADJUSTMENT',
+          movementType: "ADJUSTMENT",
           referenceType: input.referenceType as any,
           referenceId: input.referenceId,
-          reasonCode: 'RESERVATION_RELEASED',
+          reasonCode: "RESERVATION_RELEASED",
           createdById: input.createdById,
-          metadata: { reservationAction: 'release' },
+          metadata: { reservationAction: "release" },
         },
       });
 
@@ -354,23 +393,121 @@ export class StockReservationService {
           unitId: input.unitId,
           quantityDelta: input.quantity,
           baseQuantityDelta: input.baseQuantity,
-          movementType: 'STOCK_IN',
+          movementType: "STOCK_IN",
           referenceType: input.referenceType as any,
           referenceId: input.referenceId,
-          reasonCode: 'RESERVATION_RELEASED',
+          reasonCode: "RESERVATION_RELEASED",
           createdById: input.createdById,
-          metadata: { reservationAction: 'release' },
+          metadata: { reservationAction: "release" },
         },
       });
 
       return { eventId: event.id, releasedBaseQty: input.baseQuantity };
+    };
+
+    const result = transaction
+      ? await release(transaction)
+      : await this.prisma.$transaction(release);
+    if (recordAudit) {
+      await this.audit.record({
+        actorUserId: input.createdById,
+        action: "STOCK_ADJUSTMENT_POSTED" as any,
+        entityType: "PRODUCT",
+        entityId: input.productId,
+        branchId: input.branchId,
+        afterData: {
+          action: "release",
+          productId: input.productId,
+          quantity: input.baseQuantity,
+        },
+      });
+    }
+    return result;
+  }
+
+  async consumeForOrder(
+    tx: Prisma.TransactionClient,
+    input: {
+      salesOrderId: string;
+      invoiceId: string;
+      branchId: string;
+      createdById: string;
+    },
+  ) {
+    const lockedReservations = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id
+      FROM "StockReservation"
+      WHERE "salesOrderId" = ${input.salesOrderId}
+        AND status = 'ACTIVE'::"StockReservationStatus"
+      FOR UPDATE
+    `;
+
+    if (lockedReservations.length === 0) {
+      throw new AppError(
+        ErrorCodes.CONFLICT,
+        "No active reservation is available for this order.",
+        409,
+      );
+    }
+
+    const reservations = await tx.stockReservation.findMany({
+      where: { id: { in: lockedReservations.map((reservation) => reservation.id) } },
+      include: { items: true },
     });
+    const movements = reservations.flatMap((reservation) =>
+      reservation.items.map((item) => ({
+        locationId: reservation.locationId,
+        productId: item.productId,
+        batchId: item.batchId ?? undefined,
+        unitId: item.unitId,
+        stockState: StockState.RESERVED,
+        quantityDelta: -Number(item.quantity),
+        baseQuantityDelta: -Number(item.baseQuantity),
+        movementType: "SALE_DEDUCTION" as const,
+        reasonCode: "RESERVATION_CONSUMED",
+      })),
+    );
+
+    if (movements.length === 0) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_ERROR,
+        "The order reservation has no items.",
+        422,
+      );
+    }
+
+    const event = await this.ledger.postEvent(
+      {
+        eventType: "SALE_DEDUCTED",
+        branchId: input.branchId,
+        referenceType: "INVOICE",
+        referenceId: input.invoiceId,
+        createdById: input.createdById,
+        idempotencyKey: `invoice-reservation-consume-${input.invoiceId}`,
+        movements,
+      },
+      tx,
+    );
+
+    await tx.stockReservation.updateMany({
+      where: { id: { in: reservations.map((reservation) => reservation.id) }, status: "ACTIVE" },
+      data: { status: StockReservationStatus.CONSUMED, consumedAt: new Date() },
+    });
+
+    return {
+      eventId: event.eventId,
+      reservationIds: reservations.map((reservation) => reservation.id),
+      movementCount: movements.length,
+    };
   }
 
   /**
    * List all reserved stock for a location or branch.
    */
-  async listReservations(filter: { branchId?: string; locationId?: string; productId?: string }, pagination: { skip: number; take: number }) {
+  async listReservations(
+    filter: { branchId?: string; locationId?: string; productId?: string },
+    pagination: { skip: number; take: number },
+  ) {
     const where: Prisma.InventorySnapshotWhereInput = {
       stockState: StockState.RESERVED,
       baseQuantity: { gt: 0 },
@@ -388,9 +525,11 @@ export class StockReservationService {
           product: { select: { id: true, name: true, skuCode: true } },
           batch: { select: { id: true, batchNumber: true } },
           unit: true,
-          location: { include: { branch: { select: { id: true, name: true } } } },
+          location: {
+            include: { branch: { select: { id: true, name: true } } },
+          },
         },
-        orderBy: { updatedAt: 'desc' },
+        orderBy: { updatedAt: "desc" },
       }),
       this.prisma.inventorySnapshot.count({ where }),
     ]);

@@ -17,6 +17,10 @@ services:
         sync: false
       - key: CORS_ORIGIN
         sync: false
+      - key: STORE_SYNC_WEBHOOK_URL
+        sync: false
+      - key: STORE_SYNC_WEBHOOK_SECRET
+        sync: false
       - key: PORT
         value: 10000
       - key: NODE_ENV

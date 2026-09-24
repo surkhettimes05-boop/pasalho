@@ -1,6 +1,15 @@
-import { IsString, IsNotEmpty, IsOptional, IsArray, ValidateNested, IsNumber, Min } from 'class-validator';
-import { Type } from 'class-transformer';
-import { StockState } from '@prisma/client';
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsArray,
+  ArrayNotEmpty,
+  ValidateNested,
+  IsNumber,
+  Min,
+} from "class-validator";
+import { Type } from "class-transformer";
+import { StockState } from "@prisma/client";
 
 export class CreateStockTransferItemDto {
   @IsString()
@@ -57,7 +66,12 @@ export class CreateStockTransferDto {
   @IsOptional()
   notes?: string;
 
+  @IsString()
+  @IsOptional()
+  externalReference?: string;
+
   @IsArray()
+  @ArrayNotEmpty()
   @ValidateNested({ each: true })
   @Type(() => CreateStockTransferItemDto)
   items: CreateStockTransferItemDto[];

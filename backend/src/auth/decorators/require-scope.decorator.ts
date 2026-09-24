@@ -2,7 +2,16 @@ import { SetMetadata } from '@nestjs/common';
 
 export const SCOPE_KEY = 'scope_type';
 
-export type ScopeType = 'branch' | 'warehouse';
+export type ScopeType =
+	| 'branch'
+	| 'warehouse'
+	| 'store'
+	| 'sales-rep'
+	| 'retailer'
+	| 'order'
+	| 'transfer'
+	| 'invoice'
+	| 'payment';
 
 /**
  * Marks an endpoint as requiring a specific location scope.
@@ -10,7 +19,7 @@ export type ScopeType = 'branch' | 'warehouse';
  * the user's assigned roles.
  *
  * @example
- * @RequireScope('branch')  // reads branchId from body/query/params
- * @RequireScope('warehouse') // reads warehouseId from body/query/params
+ * Resource scopes resolve the resource ID to its owning branch/warehouse
+ * before checking the user's existing role assignments.
  */
 export const RequireScope = (scope: ScopeType) => SetMetadata(SCOPE_KEY, scope);

@@ -24,6 +24,21 @@ describe('PaymentService', () => {
         findUnique: jest.fn(),
         update: jest.fn(),
       } as any,
+      idempotencyRecord: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+        update: jest.fn(),
+      } as any,
+      $queryRaw: jest.fn()
+        .mockResolvedValueOnce([{
+          id: 'inv-1',
+          branchId: 'b1',
+          retailerId: 'r1',
+          grandTotal: 1000,
+          paidAmount: 0,
+          status: 'CREDIT_OPEN',
+        }])
+        .mockResolvedValueOnce([{ id: 'r1', branchId: 'b1' }]),
       $transaction: jest.fn((cb: any) => cb(prisma)),
     } as any;
 
@@ -73,6 +88,7 @@ describe('PaymentService', () => {
     const result = await service.create(
       { branchId: 'b1', retailerId: 'r1', invoiceId: 'inv-1', amount: 500, method: 'CASH' },
       'user-1',
+      'payment-test-key',
     );
     expect(result.id).toBe('pay-1');
     expect(ledger.createPaymentCredit).toHaveBeenCalled();
