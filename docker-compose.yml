@@ -3,18 +3,19 @@ version: '3.9'
 services:
   # PostgreSQL Database
   postgres:
+    profiles: ["development"]
     image: postgres:16-alpine
     container_name: pasalo-db
     environment:
-      POSTGRES_USER: ${DB_USER:-pasalo}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-pasalo_dev}
-      POSTGRES_DB: ${DB_NAME:-pasalo_dev}
+      POSTGRES_USER: ${DB_USER:?Set DB_USER before starting the PASALO stack}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD before starting the PASALO stack}
+      POSTGRES_DB: ${DB_NAME:?Set DB_NAME before starting the PASALO stack}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-pasalo}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:?Set DB_USER before starting the PASALO stack}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -24,6 +25,7 @@ services:
 
   # Redis Cache
   redis:
+    profiles: ["development"]
     image: redis:7-alpine
     container_name: pasalo-redis
     ports:
@@ -44,22 +46,24 @@ services:
       dockerfile: Dockerfile
     container_name: pasalo-backend
     environment:
-      DATABASE_URL: postgresql://${DB_USER:-pasalo}:${DB_PASSWORD:-pasalo_dev}@postgres:5432/${DB_NAME:-pasalo_dev}
-      REDIS_URL: redis://redis:6379
-      JWT_SECRET: ${JWT_SECRET:-change-this-to-a-real-secret-in-production}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the pasalo logical database before starting the backend}
+      REDIS_URL: ${REDIS_URL:?Set REDIS_URL before starting the backend}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET before starting the production-mode backend}
       JWT_EXPIRATION: ${JWT_EXPIRATION:-24h}
       NODE_ENV: ${NODE_ENV:-production}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:?Set TRUST_PROXY_HOPS=1 for the single trusted reverse proxy}
       PORT: 3000
       API_PREFIX: api
       API_VERSION: v1
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost}
+      CORS_ORIGIN: ${CORS_ORIGIN:?Set the trusted HTTPS frontend origin(s) before starting the production-mode backend}
+      STORE_SYNC_WEBHOOK_URL: ${STORE_SYNC_WEBHOOK_URL:?Set STORE_SYNC_WEBHOOK_URL before starting the production-mode backend}
+      STORE_SYNC_WEBHOOK_SECRET: ${STORE_SYNC_WEBHOOK_SECRET:?Set STORE_SYNC_WEBHOOK_SECRET before starting the production-mode backend}
+      PASALO_INTEGRATION_SECRET: ${PASALO_INTEGRATION_SECRET:?Set PASALO_INTEGRATION_SECRET to the shared Commerce credential}
+      CEO_ONLINE_ORDER_URL: ${CEO_ONLINE_ORDER_URL:?Set CEO_ONLINE_ORDER_URL to the HTTPS CEO sync endpoint}
+      CEO_ONLINE_ORDER_TIMEOUT_MS: ${CEO_ONLINE_ORDER_TIMEOUT_MS:-10000}
+      ONLINE_ORDER_BRANCH_ID: ${ONLINE_ORDER_BRANCH_ID:-}
     ports:
       - "3000:3000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     networks:
       - pasalo-network
     restart: unless-stopped
@@ -71,9 +75,12 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        PASALO_BUILD_ENV: ${NODE_ENV:-production}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Set the HTTPS PASALO API URL before building the production frontend}
     container_name: pasalo-frontend
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost/api/v1}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Set the HTTPS PASALO API URL before starting the production frontend}
       NEXT_PUBLIC_APP_NAME: PASALO OS
       NEXT_PUBLIC_JWT_TOKEN_KEY: ${NEXT_PUBLIC_JWT_TOKEN_KEY:-pasalo_jwt_token}
       NEXT_PUBLIC_PWA_ENABLED: ${NEXT_PUBLIC_PWA_ENABLED:-true}
@@ -91,7 +98,7 @@ services:
     image: nginx:alpine
     container_name: pasalo-nginx
     ports:
-      - "80:80"
+      - "${NGINX_PASALO_BIND_ADDRESS:-127.0.0.1}:${NGINX_PASALO_HOST_PORT:-8080}:80"
     volumes:
       - ./infra/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:

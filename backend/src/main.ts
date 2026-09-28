@@ -5,9 +5,11 @@ import { ThrottlerGuard } from '@nestjs/throttler';
 import { AppModule } from './app.module';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { resolveTrustProxySetting } from './config/app.config';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.getHttpAdapter().getInstance().set('trust proxy', resolveTrustProxySetting());
 
 
   app.useGlobalPipes(
@@ -25,7 +27,12 @@ async function bootstrap() {
 
   app.enableCors({
     origin: (origin, callback) => {
-      const allowedOrigins = process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3001', 'http://localhost:3002'];
+      const configuredOrigins = process.env.CORS_ORIGIN;
+      const allowedOrigins = configuredOrigins
+        ? configuredOrigins.split(',').map((origin) => origin.trim())
+        : process.env.NODE_ENV === 'production'
+          ? []
+          : ['http://localhost:3001', 'http://localhost:3002'];
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {

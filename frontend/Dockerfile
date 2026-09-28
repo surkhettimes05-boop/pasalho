@@ -9,6 +9,12 @@ RUN npm ci
 
 COPY . .
 
+ARG PASALO_BUILD_ENV=production
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+
+RUN node -e "if (process.env.PASALO_BUILD_ENV === 'production') { const url = new URL(process.env.NEXT_PUBLIC_API_URL || ''); if (url.protocol !== 'https:' || ['localhost', '127.0.0.1', '::1'].includes(url.hostname.replace(/^\\[|\\]$/g, '').toLowerCase())) process.exit(1); }"
+
 RUN npm run build
 
 # Production runtime
