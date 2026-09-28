@@ -1,14 +1,16 @@
-import { Type } from 'class-transformer';
+import { Type } from "class-transformer";
 import {
   IsArray,
+  IsEnum,
   IsNumber,
   IsOptional,
   IsString,
   IsUUID,
   Min,
   ValidateNested,
-} from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+} from "class-validator";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { OrderSource } from "@prisma/client";
 
 export class CreateSalesOrderItemDto {
   @ApiProperty()
@@ -20,24 +22,15 @@ export class CreateSalesOrderItemDto {
   @IsUUID()
   batchId?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsUUID()
-  unitId: string;
+  unitId?: string;
 
   @ApiProperty()
   @IsNumber()
   @Min(0.001)
   quantity: number;
-
-  @ApiProperty()
-  @IsNumber()
-  @Min(0.001)
-  baseQuantity: number;
-
-  @ApiProperty()
-  @IsNumber()
-  @Min(0)
-  unitPrice: number;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -62,6 +55,16 @@ export class CreateSalesOrderDto {
   @ApiProperty()
   @IsUUID()
   retailerId: string;
+
+  @ApiPropertyOptional({ enum: OrderSource, default: OrderSource.SALES_REP })
+  @IsOptional()
+  @IsEnum(OrderSource)
+  channel?: OrderSource;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  idempotencyKey?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

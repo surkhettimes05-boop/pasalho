@@ -43,4 +43,19 @@ export class PublicCheckoutDto {
   @ValidateNested({ each: true })
   @Type(() => PublicCheckoutItemDto)
   items: PublicCheckoutItemDto[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  idempotencyKey?: string;
+
+  @ApiPropertyOptional({ description: 'PASALO branch selected by the storefront' })
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
+
+  @ApiPropertyOptional({ description: 'External commerce order identifier' })
+  @IsOptional()
+  @IsString()
+  externalOrderId?: string;
 }

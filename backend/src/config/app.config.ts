@@ -32,6 +32,17 @@ export const appConfigSchema = Joi.object({
     then: Joi.string().min(32).required(),
     otherwise: Joi.string().allow('').optional(),
   }),
+  PASALO_INTEGRATION_SECRET: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().min(32).allow('').optional(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
+  CEO_ONLINE_ORDER_URL: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().uri({ scheme: ['http', 'https'] }).allow('').optional(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
+  CEO_ONLINE_ORDER_TIMEOUT_MS: Joi.number().integer().min(1000).default(10000),
   JWT_EXPIRES_IN: Joi.string().default('15m'),
   JWT_REFRESH_EXPIRES_IN: Joi.string().default('7d'),
   CORS_ORIGIN: Joi.when('NODE_ENV', {
