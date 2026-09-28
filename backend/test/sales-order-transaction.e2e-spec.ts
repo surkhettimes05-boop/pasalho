@@ -1,0 +1,736 @@
+import { randomUUID } from "crypto";
+import { AuditLogService } from "../src/audit/audit-log.service";
+import { PrismaService } from "../src/database/prisma.service";
+import { InventoryLedgerService } from "../src/inventory/services/inventory-ledger.service";
+import { StockReservationService } from "../src/inventory/services/stock-reservation.service";
+import { RetailerLedgerService } from "../src/finance/retailer-ledger/retailer-ledger.service";
+import { InvoiceService } from "../src/sales/invoice.service";
+import { SalesOrderService } from "../src/sales-orders/sales-order.service";
+import { CreateSalesOrderDto } from "../src/sales-orders/dto/create-sales-order.dto";
+import { RetailerNotificationService } from "../src/retailer-portal/retailer-notification.service";
+import { RetailerOrderService } from "../src/retailer-portal/retailer-order.service";
+
+describe("Sales-order transaction (real PostgreSQL)", () => {
+  let prisma: PrismaService;
+  let salesOrders: SalesOrderService;
+  let reservations: StockReservationService;
+  let branchId: string;
+  let userId: string;
+  let salesRepId: string;
+  let retailerId: string;
+  let routeId: string;
+  let warehouseId: string;
+  let locationId: string;
+  let productId: string;
+  let unitId: string;
+  let invoiceService: InvoiceService;
+  let retailerOrders: RetailerOrderService;
+  const prefix = `sales-order-it-${Date.now()}-${randomUUID().slice(0, 8)}`;
+
+  const dto = (quantity: number, idempotencyKey: string): CreateSalesOrderDto => ({
+    branchId,
+    salesRepId,
+    routeId,
+    retailerId,
+    channel: "SALES_REP",
+    idempotencyKey,
+    items: [{ productId, unitId, quantity }],
+  });
+
+  const buildServices = (reservationService = reservations) => {
+    const audit = new AuditLogService(prisma);
+    const ledger = new InventoryLedgerService(prisma);
+    const retailerLedger = new RetailerLedgerService(prisma);
+    invoiceService = new InvoiceService(
+      prisma,
+      audit,
+      ledger,
+      retailerLedger,
+      reservationService,
+    );
+    return new SalesOrderService(prisma, audit, invoiceService, reservationService);
+  };
+
+  const seedAvailable = async (quantity: number) => {
+    await new InventoryLedgerService(prisma).postEvent({
+      eventType: "OPENING_STOCK",
+      branchId,
+      referenceType: "STOCK_ADJUSTMENT",
+      referenceId: `${prefix}-opening-${randomUUID()}`,
+      createdById: userId,
+      movements: [
+        {
+          locationId,
+          productId,
+          unitId,
+          stockState: "AVAILABLE",
+          quantityDelta: quantity,
+          baseQuantityDelta: quantity,
+          movementType: "STOCK_IN",
+        },
+      ],
+    });
+  };
+
+  const resetInventory = async () => {
+    await prisma.retailerNotification.deleteMany({ where: { branchId } });
+    await prisma.retailerLedgerEntry.deleteMany({ where: { branchId } });
+    await prisma.financialLedgerEntry.deleteMany({ where: { branchId } });
+    await prisma.invoiceItem.deleteMany({ where: { invoice: { branchId } } });
+    await prisma.invoice.deleteMany({ where: { branchId } });
+    await prisma.stockReservationItem.deleteMany({
+      where: { reservation: { salesOrder: { branchId } } },
+    });
+    await prisma.salesOrder.deleteMany({ where: { branchId } });
+    await prisma.idempotencyRecord.deleteMany({
+      where: { scope: "sales-order.create", key: { startsWith: prefix } },
+    });
+    await prisma.inventoryMovement.deleteMany({ where: { branchId } });
+    await prisma.inventoryEvent.deleteMany({ where: { branchId } });
+    await prisma.inventorySnapshot.deleteMany({ where: { locationId } });
+  };
+
+  const snapshotBalances = async () => {
+    const snapshots = await prisma.inventorySnapshot.findMany({
+      where: { locationId, productId, unitId },
+      select: { stockState: true, baseQuantity: true },
+    });
+    return new Map(
+      snapshots.map((snapshot) => [
+        snapshot.stockState,
+        Number(snapshot.baseQuantity),
+      ]),
+    );
+  };
+
+  const orderState = async (key: string) => {
+    const [orders, items, reservationsForOrder, idempotency] = await Promise.all([
+      prisma.salesOrder.count({ where: { idempotencyKey: key } }),
+      prisma.salesOrderItem.count({ where: { salesOrder: { idempotencyKey: key } } }),
+      prisma.stockReservation.count({
+        where: { salesOrder: { idempotencyKey: key } },
+      }),
+      prisma.idempotencyRecord.findMany({
+        where: { scope: "sales-order.create", key },
+      }),
+    ]);
+    return { orders, items, reservations: reservationsForOrder, idempotency };
+  };
+
+  const createDispatchableOrder = async (quantity: number, key: string) => {
+    const order = (await salesOrders.create(dto(quantity, key), userId, key)) as any;
+    const linkedOrder = (await salesOrders.convertToInvoice(
+      order.id,
+      { warehouseId, sourceLocationId: locationId },
+      userId,
+    )) as any;
+    return { order: linkedOrder, invoiceId: linkedOrder.invoiceId! };
+  };
+
+  const movementCount = () =>
+    prisma.inventoryMovement.count({ where: { branchId } });
+
+  beforeAll(async () => {
+    prisma = new PrismaService();
+    await prisma.$connect();
+
+    const category = await prisma.category.create({
+      data: { code: `${prefix}-category`, name: "Sales order integration" },
+    });
+    const unit = await prisma.unit.create({
+      data: { code: `${prefix}-unit`, name: "Piece", symbol: "pc" },
+    });
+    unitId = unit.id;
+    const product = await prisma.product.create({
+      data: {
+        skuCode: `${prefix}-sku`,
+        name: "Sales order integration product",
+        categoryId: category.id,
+        defaultUnitId: unit.id,
+        sellingPrice: 10,
+        productUnits: {
+          create: { unitId: unit.id, conversionToBase: 1, isBaseUnit: true },
+        },
+      },
+    });
+    productId = product.id;
+
+    const branch = await prisma.branch.create({
+      data: {
+        code: `${prefix}-branch`,
+        name: "Sales order integration branch",
+        city: "Test city",
+        district: "Test district",
+      },
+    });
+    branchId = branch.id;
+    const user = await prisma.user.create({
+      data: {
+        fullName: "Sales order integration user",
+        phone: `${Date.now()}${Math.floor(Math.random() * 1000)}`.slice(-10),
+        email: `${prefix}@example.test`,
+        passwordHash: "test-only",
+        status: "ACTIVE",
+      },
+    });
+    userId = user.id;
+    const warehouse = await prisma.warehouse.create({
+      data: {
+        branchId,
+        code: `${prefix}-warehouse`,
+        name: "Sales order integration warehouse",
+      },
+    });
+    warehouseId = warehouse.id;
+    const location = await prisma.inventoryLocation.create({
+      data: {
+        branchId,
+        warehouseId: warehouse.id,
+        code: `${prefix}-location`,
+        name: "Sales order integration location",
+      },
+    });
+    locationId = location.id;
+    const retailer = await prisma.retailer.create({
+      data: {
+        branchId,
+        code: `${prefix}-retailer`,
+        shopName: "Integration retailer",
+        ownerName: "Integration owner",
+        phone: `${Date.now()}${Math.floor(Math.random() * 1000)}`.slice(-10),
+        creditLimit: 10000,
+        createdById: userId,
+      },
+    });
+    retailerId = retailer.id;
+    const salesRep = await prisma.salesRep.create({
+      data: {
+        userId,
+        branchId,
+        employeeCode: `${prefix}-rep`,
+        createdById: userId,
+      },
+    });
+    salesRepId = salesRep.id;
+    const route = await prisma.route.create({
+      data: {
+        branchId,
+        salesRepId,
+        code: `${prefix}-route`,
+        name: "Integration route",
+        createdById: userId,
+      },
+    });
+    routeId = route.id;
+    await prisma.routeStop.create({
+      data: { routeId, retailerId, stopOrder: 1 },
+    });
+
+    reservations = new StockReservationService(
+      prisma,
+      new InventoryLedgerService(prisma),
+      new AuditLogService(prisma),
+    );
+    salesOrders = buildServices();
+    await prisma.user.upsert({
+      where: { id: "99999999-9999-4999-a999-999999999999" },
+      update: { status: "ACTIVE" },
+      create: {
+        id: "99999999-9999-4999-a999-999999999999",
+        fullName: "Online order system user",
+        phone: `${Date.now()}1`.slice(-10),
+        email: `${prefix}-system@example.test`,
+        passwordHash: "test-only",
+        status: "ACTIVE",
+      },
+    });
+    process.env.ONLINE_ORDER_BRANCH_ID = branchId;
+    retailerOrders = new RetailerOrderService(
+      prisma,
+      new AuditLogService(prisma),
+      new RetailerNotificationService(prisma),
+      invoiceService,
+      salesOrders,
+    );
+  });
+
+  beforeEach(async () => {
+    await resetInventory();
+  });
+
+  afterAll(async () => {
+    await prisma.retailerNotification.deleteMany({ where: { branchId } });
+    await prisma.auditLog.deleteMany({ where: { actorUserId: userId } });
+    await prisma.retailerLedgerEntry.deleteMany({ where: { branchId } });
+    await prisma.financialLedgerEntry.deleteMany({ where: { branchId } });
+    await prisma.invoiceItem.deleteMany({ where: { invoice: { branchId } } });
+    await prisma.invoice.deleteMany({ where: { branchId } });
+    await prisma.stockReservationItem.deleteMany({
+      where: { reservation: { salesOrder: { branchId } } },
+    });
+    await prisma.salesOrder.deleteMany({ where: { branchId } });
+    await prisma.idempotencyRecord.deleteMany({
+      where: { scope: "sales-order.create", key: { startsWith: prefix } },
+    });
+    await prisma.inventoryMovement.deleteMany({ where: { branchId } });
+    await prisma.inventoryEvent.deleteMany({ where: { branchId } });
+    await prisma.inventorySnapshot.deleteMany({ where: { locationId } });
+    await prisma.routeStop.deleteMany({ where: { routeId } });
+    await prisma.route.delete({ where: { id: routeId } });
+    await prisma.salesRep.delete({ where: { id: salesRepId } });
+    await prisma.retailer.delete({ where: { id: retailerId } });
+    await prisma.inventoryLocation.delete({ where: { id: locationId } });
+    const warehouse = await prisma.warehouse.findFirst({ where: { branchId } });
+    if (warehouse) await prisma.warehouse.delete({ where: { id: warehouse.id } });
+    await prisma.product.delete({ where: { id: productId } });
+    await prisma.unit.delete({ where: { id: unitId } });
+    await prisma.category.deleteMany({ where: { code: `${prefix}-category` } });
+    await prisma.branch.delete({ where: { id: branchId } });
+    await prisma.user.delete({ where: { id: userId } });
+    await prisma.$disconnect();
+    delete process.env.ONLINE_ORDER_BRANCH_ID;
+  });
+
+  it("atomically rolls back after reservation failure", async () => {
+    const key = `${prefix}-rollback`;
+    await seedAvailable(5);
+    const beforeMovementCount = await prisma.inventoryMovement.count({
+      where: { branchId },
+    });
+    const originalReserve = reservations.reserveStock.bind(reservations);
+    const reserveSpy = jest
+      .spyOn(reservations, "reserveStock")
+      .mockImplementation(async (...args: any[]) => {
+        await originalReserve(...args);
+        throw new Error("forced failure after reservation");
+      });
+
+    await expect(salesOrders.create(dto(2, key), userId, key)).rejects.toThrow(
+      "forced failure after reservation",
+    );
+    reserveSpy.mockRestore();
+
+    expect(await orderState(key)).toMatchObject({
+      orders: 0,
+      items: 0,
+      reservations: 0,
+      idempotency: [],
+    });
+    expect(await prisma.inventoryMovement.count({ where: { branchId } })).toBe(
+      beforeMovementCount,
+    );
+    expect(await snapshotBalances()).toEqual(new Map([["AVAILABLE", 5]]));
+  });
+
+  it("rejects insufficient stock without changing PostgreSQL state", async () => {
+    const key = `${prefix}-insufficient`;
+    await seedAvailable(5);
+    const beforeMovementCount = await prisma.inventoryMovement.count({
+      where: { branchId },
+    });
+
+    await expect(salesOrders.create(dto(6, key), userId, key)).rejects.toThrow(
+      /Insufficient available stock|Insufficient stock/i,
+    );
+
+    expect(await orderState(key)).toMatchObject({
+      orders: 0,
+      items: 0,
+      reservations: 0,
+      idempotency: [],
+    });
+    expect(await prisma.inventoryMovement.count({ where: { branchId } })).toBe(
+      beforeMovementCount,
+    );
+    expect(await snapshotBalances()).toEqual(new Map([["AVAILABLE", 5]]));
+  });
+
+  it("serializes concurrent reservations and never reserves ten units", async () => {
+    await seedAvailable(5);
+    const results = await Promise.allSettled([
+      salesOrders.create(dto(5, `${prefix}-concurrent-a`), userId),
+      salesOrders.create(dto(5, `${prefix}-concurrent-b`), userId),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const balances = await snapshotBalances();
+    expect(balances.get("RESERVED")).toBe(5);
+    expect(balances.get("AVAILABLE") ?? 0).toBe(0);
+    expect(
+      await prisma.stockReservation.count({
+        where: { salesOrder: { branchId } },
+      }),
+    ).toBe(1);
+    expect(await prisma.salesOrder.count({ where: { branchId } })).toBe(1);
+  });
+
+  it("returns the same result for repeated idempotent submission", async () => {
+    const key = `${prefix}-same-request`;
+    await seedAvailable(5);
+    const first = (await salesOrders.create(dto(2, key), userId, key)) as any;
+    const second = (await salesOrders.create(dto(2, key), userId, key)) as any;
+
+    expect(second.id).toBe(first.id);
+    expect(await prisma.salesOrder.count({ where: { branchId } })).toBe(1);
+    expect(
+      await prisma.stockReservation.count({
+        where: { salesOrder: { branchId } },
+      }),
+    ).toBe(1);
+    expect(await prisma.inventoryMovement.count({ where: { branchId } })).toBe(3);
+    expect((await snapshotBalances()).get("RESERVED")).toBe(2);
+  });
+
+  it("rejects a changed payload for an existing idempotency key", async () => {
+    const key = `${prefix}-changed-request`;
+    await seedAvailable(5);
+    await salesOrders.create(dto(2, key), userId, key);
+
+    await expect(salesOrders.create(dto(3, key), userId, key)).rejects.toThrow(
+      "different request",
+    );
+    expect(await prisma.salesOrder.count({ where: { branchId } })).toBe(1);
+    expect(
+      await prisma.stockReservation.count({
+        where: { salesOrder: { branchId } },
+      }),
+    ).toBe(1);
+    expect((await snapshotBalances()).get("RESERVED")).toBe(2);
+  });
+
+  it("releases a reservation exactly once on repeated cancellation", async () => {
+    const key = `${prefix}-cancel`;
+    await seedAvailable(5);
+    const order = (await salesOrders.create(dto(2, key), userId, key)) as any;
+    const reservationMovementCount = await prisma.inventoryMovement.count({
+      where: { branchId },
+    });
+
+    await salesOrders.cancel(order.id, userId);
+    const afterFirstCancel = await prisma.inventoryMovement.count({
+      where: { branchId },
+    });
+    expect(afterFirstCancel).toBe(reservationMovementCount + 2);
+    expect((await snapshotBalances()).get("AVAILABLE")).toBe(5);
+    expect((await snapshotBalances()).get("RESERVED") ?? 0).toBe(0);
+    expect(
+      await prisma.stockReservation.count({
+        where: { salesOrderId: order.id, status: "RELEASED" },
+      }),
+    ).toBe(1);
+
+    await salesOrders.cancel(order.id, userId);
+    expect(await prisma.inventoryMovement.count({ where: { branchId } })).toBe(
+      afterFirstCancel,
+    );
+    expect((await snapshotBalances()).get("AVAILABLE")).toBe(5);
+  });
+
+  it("consumes RESERVED stock exactly once during invoice dispatch", async () => {
+    await seedAvailable(5);
+    const { order, invoiceId } = await createDispatchableOrder(2, `${prefix}-dispatch`);
+    const beforeDispatch = await movementCount();
+
+    await invoiceService.post(invoiceId, userId);
+
+    const reservation = await prisma.stockReservation.findFirstOrThrow({
+      where: { salesOrderId: order.id },
+    });
+    expect(reservation.status).toBe("CONSUMED");
+    expect((await snapshotBalances()).get("AVAILABLE")).toBe(3);
+    expect((await snapshotBalances()).get("RESERVED") ?? 0).toBe(0);
+    expect(await movementCount()).toBe(beforeDispatch + 1);
+    expect(
+      await prisma.inventoryMovement.count({
+        where: { branchId, referenceType: "INVOICE", referenceId: invoiceId },
+      }),
+    ).toBe(1);
+  });
+
+  it("makes duplicate dispatch idempotent", async () => {
+    await seedAvailable(5);
+    const { order, invoiceId } = await createDispatchableOrder(2, `${prefix}-dispatch-duplicate`);
+    await invoiceService.post(invoiceId, userId);
+    const afterFirst = await movementCount();
+
+    await invoiceService.post(invoiceId, userId);
+
+    const reservation = await prisma.stockReservation.findFirstOrThrow({
+      where: { salesOrderId: order.id },
+    });
+    expect(reservation.status).toBe("CONSUMED");
+    expect(await movementCount()).toBe(afterFirst);
+    expect(
+      await prisma.inventoryMovement.count({
+        where: { branchId, referenceType: "INVOICE", referenceId: invoiceId },
+      }),
+    ).toBe(1);
+  });
+
+  it("cancels an active reservation without physical deduction", async () => {
+    await seedAvailable(5);
+    const { order } = await (async () => {
+      const created = (await salesOrders.create(dto(2, `${prefix}-cancel-dispatch`), userId)) as any;
+      return { order: created };
+    })();
+    const beforeCancel = await movementCount();
+
+    await salesOrders.cancel(order.id, userId);
+
+    const reservation = await prisma.stockReservation.findFirstOrThrow({
+      where: { salesOrderId: order.id },
+    });
+    expect(reservation.status).toBe("RELEASED");
+    expect((await snapshotBalances()).get("AVAILABLE")).toBe(5);
+    expect((await snapshotBalances()).get("RESERVED") ?? 0).toBe(0);
+    expect(await movementCount()).toBe(beforeCancel + 2);
+  });
+
+  it("does not release an already released reservation twice", async () => {
+    await seedAvailable(5);
+    const order = (await salesOrders.create(dto(2, `${prefix}-cancel-duplicate`), userId)) as any;
+    await salesOrders.cancel(order.id, userId);
+    const afterFirst = await movementCount();
+
+    await salesOrders.cancel(order.id, userId);
+
+    expect(await movementCount()).toBe(afterFirst);
+    expect((await snapshotBalances()).get("AVAILABLE")).toBe(5);
+  });
+
+  it("rejects consumption after cancellation without deducting stock", async () => {
+    await seedAvailable(5);
+    const order = (await salesOrders.create(dto(2, `${prefix}-cancel-then-dispatch`), userId)) as any;
+    await salesOrders.cancel(order.id, userId);
+    const beforeDispatch = await movementCount();
+
+    await expect(
+      prisma.$transaction((tx) =>
+        reservations.consumeForOrder(tx, {
+          salesOrderId: order.id,
+          invoiceId: randomUUID(),
+          branchId,
+          createdById: userId,
+        }),
+      ),
+    ).rejects.toThrow("No active reservation");
+    expect(await movementCount()).toBe(beforeDispatch);
+    expect((await snapshotBalances()).get("AVAILABLE")).toBe(5);
+  });
+
+  it("rejects cancellation after dispatch without restoring consumed stock", async () => {
+    await seedAvailable(5);
+    const { order, invoiceId } = await createDispatchableOrder(2, `${prefix}-dispatch-then-cancel`);
+    await invoiceService.post(invoiceId, userId);
+    const beforeCancel = await movementCount();
+
+    await expect(salesOrders.cancel(order.id, userId)).rejects.toThrow(
+      "Order cannot be cancelled",
+    );
+    expect(await movementCount()).toBe(beforeCancel);
+    expect((await snapshotBalances()).get("AVAILABLE")).toBe(3);
+    expect((await snapshotBalances()).get("RESERVED") ?? 0).toBe(0);
+  });
+
+  it("rolls back invoice, consumption, and movement on forced dispatch failure", async () => {
+    await seedAvailable(5);
+    const { order, invoiceId } = await createDispatchableOrder(2, `${prefix}-dispatch-failure`);
+    const beforeDispatch = await movementCount();
+    const originalConsume = reservations.consumeForOrder.bind(reservations);
+    const consumeSpy = jest
+      .spyOn(reservations, "consumeForOrder")
+      .mockImplementation(async (...args: any[]) => {
+        await originalConsume(...args);
+        throw new Error("forced dispatch failure");
+      });
+
+    await expect(invoiceService.post(invoiceId, userId)).rejects.toThrow(
+      "forced dispatch failure",
+    );
+    consumeSpy.mockRestore();
+
+    const reservation = await prisma.stockReservation.findFirstOrThrow({
+      where: { salesOrderId: order.id },
+    });
+    const invoice = await prisma.invoice.findUniqueOrThrow({ where: { id: invoiceId } });
+    expect(reservation.status).toBe("ACTIVE");
+    expect(invoice.status).toBe("DRAFT");
+    expect(await movementCount()).toBe(beforeDispatch);
+    expect((await snapshotBalances()).get("AVAILABLE")).toBe(3);
+    expect((await snapshotBalances()).get("RESERVED")).toBe(2);
+    expect(
+      await prisma.financialLedgerEntry.count({ where: { referenceId: invoiceId } }),
+    ).toBe(0);
+  });
+
+  it("serializes concurrent duplicate dispatch requests", async () => {
+    await seedAvailable(5);
+    const { order, invoiceId } = await createDispatchableOrder(2, `${prefix}-dispatch-race`);
+    const beforeDispatch = await movementCount();
+
+    const results = await Promise.allSettled([
+      invoiceService.post(invoiceId, userId),
+      invoiceService.post(invoiceId, userId),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(2);
+    const reservation = await prisma.stockReservation.findFirstOrThrow({
+      where: { salesOrderId: order.id },
+    });
+    expect(reservation.status).toBe("CONSUMED");
+    expect(await movementCount()).toBe(beforeDispatch + 1);
+    expect(
+      await prisma.inventoryMovement.count({
+        where: { branchId, referenceType: "INVOICE", referenceId: invoiceId },
+      }),
+    ).toBe(1);
+  });
+
+  it("routes public checkout through authoritative pricing and reservation", async () => {
+    await seedAvailable(5);
+    const key = `${prefix}-public-create`;
+    const order = (await salesOrders.createPublicOrder({
+      firstName: "Online",
+      lastName: "Customer",
+      phone: `${Date.now()}`.slice(-10),
+      address: "Test address",
+      idempotencyKey: key,
+      items: [{ productId, quantity: 2 }],
+    }, key)) as any;
+
+    const stored = await prisma.salesOrder.findUniqueOrThrow({
+      where: { id: order.id },
+      include: { items: true, reservations: { include: { items: true } } },
+    });
+    expect(stored.source).toBe("STOREFRONT");
+    expect(Number(stored.items[0].unitPrice)).toBe(10);
+    expect(Number(stored.items[0].baseQuantity)).toBe(2);
+    expect(stored.reservations).toHaveLength(1);
+    expect(stored.reservations[0].status).toBe("ACTIVE");
+    expect((await snapshotBalances()).get("AVAILABLE")).toBe(3);
+    expect((await snapshotBalances()).get("RESERVED")).toBe(2);
+    expect(await prisma.idempotencyRecord.count({ where: { key: `${key}` } })).toBe(1);
+  });
+
+  it("routes retailer portal orders through the same reservation path", async () => {
+    await seedAvailable(5);
+    const key = `${prefix}-retailer-create`;
+    const order = (await retailerOrders.placeOrder(
+      retailerId,
+      [{ productId, unitId, quantity: 2 }],
+      "retailer order",
+      key,
+    )) as any;
+    const reservation = await prisma.stockReservation.findFirstOrThrow({
+      where: { salesOrderId: order.id },
+    });
+    const item = await prisma.salesOrderItem.findFirstOrThrow({
+      where: { salesOrderId: order.id },
+    });
+    expect(Number(item.unitPrice)).toBe(10);
+    expect(reservation.status).toBe("ACTIVE");
+    expect((await snapshotBalances()).get("AVAILABLE")).toBe(3);
+    expect((await snapshotBalances()).get("RESERVED")).toBe(2);
+  });
+
+  it.each([
+    ["public", async (key: string) => salesOrders.createPublicOrder({
+      firstName: "Online", lastName: "Customer", phone: `${Date.now()}`.slice(-10),
+      address: "Test address", idempotencyKey: key, items: [{ productId, quantity: 6 }],
+    }, key)],
+    ["retailer", async (key: string) => retailerOrders.placeOrder(
+      retailerId, [{ productId, unitId, quantity: 6 }], undefined, key,
+    )],
+  ])("rejects insufficient stock for %s orders without partial state", async (_channel, operation) => {
+    await seedAvailable(5);
+    const key = `${prefix}-insufficient-${_channel}`;
+    const before = await movementCount();
+    await expect(operation(key)).rejects.toThrow(/Insufficient (available )?stock/i);
+    expect(await prisma.salesOrder.count({ where: { branchId } })).toBe(0);
+    expect(await prisma.stockReservation.count({ where: { salesOrder: { branchId } } })).toBe(0);
+    expect(await movementCount()).toBe(before);
+    expect((await snapshotBalances()).get("AVAILABLE")).toBe(5);
+  });
+
+  it("replays a public order by idempotency key without duplicates", async () => {
+    await seedAvailable(5);
+    const key = `${prefix}-public-retry`;
+    const input = {
+      firstName: "Retry", lastName: "Customer", phone: `${Date.now()}`.slice(-10),
+      address: "Retry address", idempotencyKey: key, items: [{ productId, quantity: 2 }],
+    };
+    const first = (await salesOrders.createPublicOrder(input, key)) as any;
+    const second = (await salesOrders.createPublicOrder(input, key)) as any;
+    expect(second.id).toBe(first.id);
+    expect(await prisma.salesOrder.count({ where: { branchId } })).toBe(1);
+    expect(await prisma.stockReservation.count({ where: { salesOrder: { branchId } } })).toBe(1);
+    expect(await prisma.idempotencyRecord.count({ where: { scope: "sales-order.create", key } })).toBe(1);
+  });
+
+  it("replays a retailer order by idempotency key without duplicates", async () => {
+    await seedAvailable(5);
+    const key = `${prefix}-retailer-retry`;
+    const first = (await retailerOrders.placeOrder(retailerId, [{ productId, unitId, quantity: 2 }], undefined, key)) as any;
+    const second = (await retailerOrders.placeOrder(retailerId, [{ productId, unitId, quantity: 2 }], undefined, key)) as any;
+    expect(second.id).toBe(first.id);
+    expect(await prisma.salesOrder.count({ where: { branchId } })).toBe(1);
+    expect(await prisma.stockReservation.count({ where: { salesOrder: { branchId } } })).toBe(1);
+  });
+
+  it("rejects a conflicting public idempotency key", async () => {
+    await seedAvailable(5);
+    const key = `${prefix}-public-conflict`;
+    const base = { firstName: "Conflict", lastName: "Customer", phone: `${Date.now()}`.slice(-10), address: "Address", idempotencyKey: key };
+    await salesOrders.createPublicOrder({ ...base, items: [{ productId, quantity: 2 }] }, key);
+    await expect(salesOrders.createPublicOrder({ ...base, items: [{ productId, quantity: 3 }] }, key)).rejects.toThrow("different request");
+    expect(await prisma.salesOrder.count({ where: { branchId } })).toBe(1);
+  });
+
+  it("releases an online retailer reservation exactly once on cancellation", async () => {
+    await seedAvailable(5);
+    const key = `${prefix}-retailer-cancel`;
+    const order = (await retailerOrders.placeOrder(retailerId, [{ productId, unitId, quantity: 2 }], undefined, key)) as any;
+    const before = await movementCount();
+    await retailerOrders.cancelOrder(retailerId, order.id);
+    const after = await movementCount();
+    await retailerOrders.cancelOrder(retailerId, order.id);
+    expect(await movementCount()).toBe(after);
+    expect(after).toBe(before + 2);
+    expect((await prisma.stockReservation.findFirstOrThrow({ where: { salesOrderId: order.id } })).status).toBe("RELEASED");
+    expect((await snapshotBalances()).get("AVAILABLE")).toBe(5);
+  });
+
+  it("dispatches a public order through reservation consumption", async () => {
+    await seedAvailable(5);
+    const key = `${prefix}-public-dispatch`;
+    const order = (await salesOrders.createPublicOrder({
+      firstName: "Dispatch", lastName: "Customer", phone: `${Date.now()}`.slice(-10),
+      address: "Address", idempotencyKey: key, items: [{ productId, quantity: 2 }],
+    }, key)) as any;
+    const converted = (await salesOrders.convertToInvoice(order.id, { warehouseId, sourceLocationId: locationId }, userId)) as any;
+    const before = await movementCount();
+    await invoiceService.post(converted.invoiceId, userId);
+    expect((await prisma.stockReservation.findFirstOrThrow({ where: { salesOrderId: order.id } })).status).toBe("CONSUMED");
+    expect((await snapshotBalances()).get("AVAILABLE")).toBe(3);
+    expect((await snapshotBalances()).get("RESERVED") ?? 0).toBe(0);
+    expect(await movementCount()).toBe(before + 1);
+  });
+
+  it("allows only one concurrent public order to reserve five units", async () => {
+    await seedAvailable(5);
+    const makeInput = (key: string) => ({
+      firstName: "Concurrent", lastName: "Customer", phone: `${Date.now()}${key.slice(-2)}`.slice(-10),
+      address: "Address", idempotencyKey: key, items: [{ productId, quantity: 5 }],
+    });
+    const results = await Promise.allSettled([
+      salesOrders.createPublicOrder(makeInput(`${prefix}-online-a`), `${prefix}-online-a`),
+      salesOrders.createPublicOrder(makeInput(`${prefix}-online-b`), `${prefix}-online-b`),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(await prisma.stockReservation.count({ where: { salesOrder: { branchId } } })).toBe(1);
+    expect((await snapshotBalances()).get("RESERVED")).toBe(5);
+    expect((await snapshotBalances()).get("AVAILABLE") ?? 0).toBe(0);
+  });
+});
