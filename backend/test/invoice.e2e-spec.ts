@@ -3,6 +3,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/database/prisma.service';
 import * as request from 'supertest';
+import { randomUUID } from 'crypto';
 
 describe('Invoice Lifecycle (e2e)', () => {
   let app: INestApplication;
@@ -17,6 +18,15 @@ describe('Invoice Lifecycle (e2e)', () => {
   let batchId: string;
   let retailerId: string;
   let invoiceId: string;
+  let adminId: string;
+  let roleId: string;
+  let otherBranchId: string;
+  const fixtureSuffix = randomUUID().replace(/-/g, '').slice(0, 12).toUpperCase();
+  const fixturePrefix = `INV-E2E-${fixtureSuffix}`;
+  const adminEmail = `${fixturePrefix.toLowerCase()}@example.test`;
+  const adminPhone = `9${Date.now().toString().slice(-9)}`;
+  const retailerPhone = `98${(Date.now() + 1).toString().slice(-8)}`;
+  const paymentIdempotencyKey = `${fixturePrefix}-payment`;
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -30,47 +40,19 @@ describe('Invoice Lifecycle (e2e)', () => {
 
     prisma = app.get(PrismaService);
 
-    // Clean slate
-    await prisma.auditLog.deleteMany();
-    await prisma.retailerLedgerEntry.deleteMany();
-    await prisma.financialLedgerEntry.deleteMany();
-    await prisma.inventoryMovement.deleteMany();
-    await prisma.inventoryEvent.deleteMany();
-    await prisma.inventorySnapshot.deleteMany();
-    await prisma.invoiceItem.deleteMany();
-    await prisma.invoice.deleteMany();
-    await prisma.payment.deleteMany();
-    await prisma.stockAdjustmentItem.deleteMany();
-    await prisma.stockAdjustment.deleteMany();
-    await prisma.batch.deleteMany();
-    await prisma.productUnit.deleteMany();
-    await prisma.product.deleteMany();
-    await prisma.category.deleteMany();
-    await prisma.brand.deleteMany();
-    await prisma.unit.deleteMany();
-    await prisma.inventoryLocation.deleteMany();
-    await prisma.warehouse.deleteMany();
-    await prisma.branch.deleteMany();
-    await prisma.session.deleteMany();
-    await prisma.loginAttempt.deleteMany();
-    await prisma.userRole.deleteMany();
-    await prisma.rolePermission.deleteMany();
-    await prisma.permission.deleteMany();
-    await prisma.role.deleteMany();
-    await prisma.user.deleteMany();
-
-    // Seed admin user
+    // Use isolated fixtures so this suite never clears business or other test data.
     const bcrypt = require('bcryptjs');
     const passwordHash = await bcrypt.hash('Admin@1234', 10);
     const admin = await prisma.user.create({
       data: {
         fullName: 'Super Admin',
-        email: 'superadmin@pasalo.com',
-        phone: '9800000000',
+        email: adminEmail,
+        phone: adminPhone,
         passwordHash,
         status: 'ACTIVE',
       },
     });
+    adminId = admin.id;
 
     // Seed SUPER_ADMIN role and full permissions
     const allPerms = [
@@ -87,16 +69,18 @@ describe('Invoice Lifecycle (e2e)', () => {
       { code: 'organization:write', module: 'organization', action: 'write' },
       { code: 'dashboard:read', module: 'dashboard', action: 'read' },
     ];
-    await prisma.permission.createMany({ data: allPerms });
+    await prisma.permission.createMany({ data: allPerms, skipDuplicates: true });
 
     const role = await prisma.role.create({
       data: {
-        code: 'SUPER_ADMIN',
-        name: 'Super Admin',
-        isSystemRole: true,
+        code: `${fixturePrefix}-SUPER-ADMIN`,
+        name: 'Invoice E2E Admin',
       },
     });
-    const perms = await prisma.permission.findMany();
+    roleId = role.id;
+    const perms = await prisma.permission.findMany({
+      where: { code: { in: allPerms.map((permission) => permission.code) } },
+    });
     await prisma.rolePermission.createMany({
       data: perms.map((p) => ({ roleId: role.id, permissionId: p.id })),
     });
@@ -104,13 +88,90 @@ describe('Invoice Lifecycle (e2e)', () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    try {
+      const branchIds = [branchId, otherBranchId].filter(
+        (id): id is string => Boolean(id),
+      );
+
+      if (branchIds.length) {
+        await prisma.payment.deleteMany({
+          where: { branchId: { in: branchIds }, receivedById: adminId },
+        });
+        await prisma.retailerLedgerEntry.deleteMany({
+          where: { branchId: { in: branchIds } },
+        });
+        await prisma.financialLedgerEntry.deleteMany({
+          where: { branchId: { in: branchIds } },
+        });
+        await prisma.invoice.deleteMany({ where: { branchId: { in: branchIds } } });
+        await prisma.stockAdjustment.deleteMany({ where: { branchId: { in: branchIds } } });
+      }
+
+      if (locationId) {
+        await prisma.inventoryMovement.deleteMany({ where: { locationId } });
+        await prisma.inventorySnapshot.deleteMany({ where: { locationId } });
+      }
+
+      if (branchIds.length) {
+        const events = await prisma.inventoryEvent.findMany({
+          where: { branchId: { in: branchIds } },
+          select: { id: true },
+        });
+        const eventIds = events.map((event) => event.id);
+        if (eventIds.length) {
+          await prisma.inventoryEvent.updateMany({
+            where: { id: { in: eventIds } },
+            data: { reversalOfEventId: null },
+          });
+          await prisma.inventoryEvent.deleteMany({ where: { id: { in: eventIds } } });
+        }
+        await prisma.auditLog.deleteMany({
+          where: { actorUserId: adminId, branchId: { in: branchIds } },
+        });
+      }
+
+      if (invoiceId) {
+        await prisma.payment.deleteMany({ where: { invoiceId } });
+      }
+      if (retailerId) {
+        await prisma.retailerNotification.deleteMany({ where: { retailerId } });
+        await prisma.retailerSession.deleteMany({ where: { retailerId } });
+        await prisma.retailerDevice.deleteMany({ where: { retailerId } });
+        await prisma.retailerLedgerEntry.deleteMany({ where: { retailerId } });
+        await prisma.retailer.deleteMany({ where: { id: retailerId } });
+      }
+
+      if (batchId) await prisma.batch.deleteMany({ where: { id: batchId } });
+      if (productId) {
+        await prisma.productUnit.deleteMany({ where: { productId } });
+        await prisma.product.deleteMany({ where: { id: productId } });
+      }
+      if (categoryId) await prisma.category.deleteMany({ where: { id: categoryId } });
+      if (unitId) await prisma.unit.deleteMany({ where: { id: unitId } });
+      if (locationId) await prisma.inventoryLocation.deleteMany({ where: { id: locationId } });
+      if (warehouseId) await prisma.warehouse.deleteMany({ where: { id: warehouseId } });
+      if (branchIds.length) await prisma.branch.deleteMany({ where: { id: { in: branchIds } } });
+
+      if (adminId) {
+        await prisma.auditLog.deleteMany({ where: { actorUserId: adminId } });
+        await prisma.userRole.deleteMany({ where: { userId: adminId } });
+        await prisma.session.deleteMany({ where: { userId: adminId } });
+        await prisma.loginAttempt.deleteMany({ where: { email: adminEmail } });
+      }
+      if (roleId) {
+        await prisma.rolePermission.deleteMany({ where: { roleId } });
+        await prisma.role.deleteMany({ where: { id: roleId } });
+      }
+      if (adminId) await prisma.user.deleteMany({ where: { id: adminId } });
+    } finally {
+      await app.close();
+    }
   });
 
   it('1. Login', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ login: 'superadmin@pasalo.com', password: 'Admin@1234' });
+      .send({ login: adminEmail, password: 'Admin@1234' });
 
     expect(res.status).toBe(201);
     expect(res.body.data.accessToken).toBeDefined();
@@ -121,7 +182,7 @@ describe('Invoice Lifecycle (e2e)', () => {
     const branchRes = await request(app.getHttpServer())
       .post('/api/v1/branches')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ code: 'BR-001', name: 'Kathmandu Central', city: 'Kathmandu', district: 'Kathmandu' });
+      .send({ code: `${fixturePrefix}-BR-001`, name: 'Kathmandu Central', city: 'Kathmandu', district: 'Kathmandu' });
 
     expect(branchRes.status).toBe(201);
     branchId = branchRes.body.data.id;
@@ -129,7 +190,7 @@ describe('Invoice Lifecycle (e2e)', () => {
     const warehouseRes = await request(app.getHttpServer())
       .post('/api/v1/warehouses')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ branchId, code: 'WH-001', name: 'Main Warehouse' });
+      .send({ branchId, code: `${fixturePrefix}-WH-001`, name: 'Main Warehouse' });
 
     expect(warehouseRes.status).toBe(201);
     warehouseId = warehouseRes.body.data.id;
@@ -141,7 +202,7 @@ describe('Invoice Lifecycle (e2e)', () => {
     const catRes = await request(app.getHttpServer())
       .post('/api/v1/catalog/categories')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ code: 'CAT-001', name: 'Beverages' });
+      .send({ code: `${fixturePrefix}-CAT-001`, name: 'Beverages' });
 
     expect(catRes.status).toBe(201);
     categoryId = catRes.body.data.id;
@@ -149,7 +210,7 @@ describe('Invoice Lifecycle (e2e)', () => {
     const unitRes = await request(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ code: 'PCS', name: 'Pieces', symbol: 'pcs' });
+      .send({ code: `${fixturePrefix}-PCS`, name: 'Pieces', symbol: 'pcs' });
 
     expect(unitRes.status).toBe(201);
     unitId = unitRes.body.data.id;
@@ -158,7 +219,7 @@ describe('Invoice Lifecycle (e2e)', () => {
       .post('/api/v1/catalog/products')
       .set('Authorization', `Bearer ${accessToken}`)
       .send({
-        skuCode: 'BEV-001',
+        skuCode: `${fixturePrefix}-BEV-001`,
         name: 'Coca Cola 500ml',
         categoryId,
         defaultUnitId: unitId,
@@ -175,7 +236,7 @@ describe('Invoice Lifecycle (e2e)', () => {
     const batchRes = await request(app.getHttpServer())
       .post('/api/v1/catalog/batches')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ productId, batchNumber: 'BATCH-001', costPrice: 35, mrp: 50 });
+      .send({ productId, batchNumber: `${fixturePrefix}-BATCH-001`, costPrice: 35, mrp: 50 });
 
     expect(batchRes.status).toBe(201);
     batchId = batchRes.body.data.id;
@@ -228,10 +289,10 @@ describe('Invoice Lifecycle (e2e)', () => {
       .set('Authorization', `Bearer ${accessToken}`)
       .send({
         branchId,
-        code: 'RT-001',
+        code: `${fixturePrefix}-RT-001`,
         shopName: 'Corner Store',
         ownerName: 'Ram Prasad',
-        phone: '9812345678',
+        phone: retailerPhone,
         creditLimit: 5000,
       });
 
@@ -303,6 +364,7 @@ describe('Invoice Lifecycle (e2e)', () => {
     const payRes = await request(app.getHttpServer())
       .post('/api/v1/payments')
       .set('Authorization', `Bearer ${accessToken}`)
+      .set('Idempotency-Key', paymentIdempotencyKey)
       .send({
         branchId,
         retailerId,
@@ -359,8 +421,8 @@ describe('Invoice Lifecycle (e2e)', () => {
     const branchRes = await request(app.getHttpServer())
       .post('/api/v1/branches')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ code: 'BR-002', name: 'Other Branch', city: 'Pokhara', district: 'Kaski' });
-    const otherBranchId = branchRes.body.data.id;
+      .send({ code: `${fixturePrefix}-BR-002`, name: 'Other Branch', city: 'Pokhara', district: 'Kaski' });
+    otherBranchId = branchRes.body.data.id;
 
     const res = await request(app.getHttpServer())
       .get(`/api/v1/retailers?branchId=${otherBranchId}`)
