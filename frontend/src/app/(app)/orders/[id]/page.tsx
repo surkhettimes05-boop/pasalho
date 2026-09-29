@@ -26,7 +26,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
 
   const warehousesQ = useQuery({
     queryKey: ['warehouses', order?.branchId],
-    queryFn: () => organizationApi.listWarehouses(order!.branchId),
+    queryFn: () => organizationApi.listWarehouses(order!.branchId ?? undefined),
     enabled: !!order?.branchId && showConvertModal,
   });
   const warehouses = warehousesQ.data?.items ?? [];
@@ -38,6 +38,10 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
 
   const confirmMutation = useMutation({ mutationFn: () => salesOrdersApi.confirm(id), onSuccess: invalidate });
   const cancelMutation = useMutation({ mutationFn: () => salesOrdersApi.cancel(id), onSuccess: invalidate });
+  const fulfillmentMutation = useMutation({
+    mutationFn: (status: 'PICKING' | 'PACKED' | 'DISPATCHED' | 'DELIVERED') => salesOrdersApi.updateStatus(id, status),
+    onSuccess: invalidate,
+  });
   const convertMutation = useMutation({
     mutationFn: () => salesOrdersApi.convertToInvoice(id, { warehouseId, sourceLocationId }),
     onSuccess: () => { invalidate(); setShowConvertModal(false); },
@@ -153,7 +157,21 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         </div>
       )}
 
-      {order.status === 'CONFIRMED' && !order.invoiceId && (
+      {order.source === 'STOREFRONT' && order.status !== 'DELIVERED' && order.status !== 'CANCELLED' && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+          <p className="mb-3 text-sm text-blue-900">Online order · Central Warehouse fulfillment. Warehouse stock is deducted when the order is dispatched.</p>
+          <div className="flex flex-wrap gap-3">
+            {order.status === 'CONFIRMED' && <Button onClick={() => fulfillmentMutation.mutate('PICKING')} disabled={fulfillmentMutation.isPending}>Start picking</Button>}
+            {order.status === 'PICKING' && <Button onClick={() => fulfillmentMutation.mutate('PACKED')} disabled={fulfillmentMutation.isPending}>Finish packing</Button>}
+            {order.status === 'PACKED' && <Button onClick={() => fulfillmentMutation.mutate('DISPATCHED')} disabled={fulfillmentMutation.isPending}>Dispatch order</Button>}
+            {order.status === 'DISPATCHED' && <Button onClick={() => fulfillmentMutation.mutate('DELIVERED')} disabled={fulfillmentMutation.isPending}>Mark delivered</Button>}
+            {['CONFIRMED', 'PICKING', 'PACKED'].includes(order.status) && <Button variant="outline" onClick={() => { if (confirm('Cancel this online order and release its warehouse reservation?')) cancelMutation.mutate(); }} disabled={cancelMutation.isPending}>Cancel order</Button>}
+          </div>
+          {fulfillmentMutation.isError && <p role="alert" className="mt-3 text-sm text-red-700">{(fulfillmentMutation.error as Error).message}</p>}
+        </div>
+      )}
+
+      {order.source !== 'STOREFRONT' && order.status === 'CONFIRMED' && !order.invoiceId && (
         <div className="rounded-lg border border-green-200 bg-green-50 p-4">
           <p className="mb-3 text-sm text-green-800">Order confirmed. Convert to invoice to process stock deduction.</p>
           <Button onClick={() => setShowConvertModal(true)}>Convert to Invoice</Button>

@@ -49,11 +49,6 @@ export class PublicCheckoutDto {
   @IsString()
   idempotencyKey?: string;
 
-  @ApiPropertyOptional({ description: 'PASALO branch selected by the storefront' })
-  @IsOptional()
-  @IsUUID()
-  branchId?: string;
-
   @ApiPropertyOptional({ description: 'External commerce order identifier' })
   @IsOptional()
   @IsString()

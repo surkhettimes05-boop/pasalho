@@ -40,6 +40,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <SectionLabel>Organisation</SectionLabel>
           <NavItem href="/branches"   label="Branches" />
           <NavItem href="/warehouses" label="Warehouses" />
+          <NavItem href="/warehouse/outbound" label="Online Outbound" />
 
           <SectionLabel>Catalog &amp; Stock</SectionLabel>
           <NavItem href="/products"           label="Products" />

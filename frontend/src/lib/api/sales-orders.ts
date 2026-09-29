@@ -1,6 +1,6 @@
 import { api, PaginatedResponse } from './client';
 
-export type SalesOrderStatus = 'DRAFT' | 'CONFIRMED' | 'INVOICED' | 'CANCELLED';
+export type SalesOrderStatus = 'DRAFT' | 'CONFIRMED' | 'INVOICED' | 'PLACED' | 'CANCELLED' | 'PICKING' | 'PACKED' | 'DISPATCHED' | 'DELIVERED';
 
 export interface SalesOrderItem {
   id: string;
@@ -21,15 +21,16 @@ export interface SalesOrderItem {
 export interface SalesOrder {
   id: string;
   orderNo: string;
-  branchId: string;
-  branch: { id: string; name: string };
-  salesRepId: string;
-  salesRep: { id: string; user: { id: string; fullName: string } };
+  branchId: string | null;
+  branch?: { id: string; name: string } | null;
+  salesRepId: string | null;
+  salesRep?: { id: string; user: { id: string; fullName: string } } | null;
   routeId?: string;
   route?: { id: string; name: string; code: string };
-  retailerId: string;
-  retailer: { id: string; shopName: string; ownerName: string; phone: string };
+  retailerId: string | null;
+  retailer?: { id: string; shopName: string; ownerName: string; phone: string } | null;
   status: SalesOrderStatus;
+  source?: string;
   notes?: string;
   subtotal: number | string;
   grandTotal: number | string;
@@ -50,6 +51,7 @@ export const salesOrdersApi = {
     page?: number;
     limit?: number;
     search?: string;
+    source?: string;
   }): Promise<PaginatedResponse<SalesOrder>> {
     const q = new URLSearchParams();
     if (params?.branchId) q.set('branchId', params.branchId);
@@ -58,6 +60,7 @@ export const salesOrdersApi = {
     if (params?.page) q.set('page', String(params.page));
     if (params?.limit) q.set('limit', String(params.limit));
     if (params?.search) q.set('search', params.search);
+    if (params?.source) q.set('source', params.source);
     return api.get(`/sales-orders?${q}`);
   },
 
@@ -75,6 +78,10 @@ export const salesOrdersApi = {
 
   async cancel(id: string): Promise<SalesOrder> {
     return api.post(`/sales-orders/${id}/cancel`, {});
+  },
+
+  async updateStatus(id: string, status: Extract<SalesOrderStatus, 'PICKING' | 'PACKED' | 'DISPATCHED' | 'DELIVERED'>): Promise<SalesOrder> {
+    return api.post(`/sales-orders/${id}/status`, { status });
   },
 
   async convertToInvoice(id: string, data: { warehouseId: string; sourceLocationId: string }): Promise<SalesOrder> {

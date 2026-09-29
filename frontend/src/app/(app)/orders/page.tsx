@@ -10,7 +10,7 @@ import { Badge, statusVariant } from '@/components/ui/badge';
 import { salesOrdersApi, SalesOrder } from '@/lib/api/sales-orders';
 import { formatDate, formatCurrency } from '@/lib/utils/cn';
 
-const STATUS_FILTERS = ['ALL', 'DRAFT', 'CONFIRMED', 'INVOICED', 'CANCELLED'];
+const STATUS_FILTERS = ['ALL', 'DRAFT', 'CONFIRMED', 'PICKING', 'PACKED', 'DISPATCHED', 'DELIVERED', 'INVOICED', 'CANCELLED'];
 
 export default function OrdersPage() {
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -37,7 +37,7 @@ export default function OrdersPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Sales Orders</h1>
-          <p className="mt-1 text-sm text-slate-500">Orders captured by sales reps on route</p>
+          <p className="mt-1 text-sm text-slate-500">B2B sales orders and central warehouse storefront fulfillment</p>
         </div>
         <Link href="/orders/new">
           <Button>+ New Order</Button>

@@ -17,7 +17,6 @@ import { ConvertToInvoiceDto } from "./dto/convert-to-invoice.dto";
 import { PublicCheckoutDto } from "./dto/public-checkout.dto";
 import { InvoiceService } from "../sales/invoice.service";
 import { StockReservationService } from "../inventory/services/stock-reservation.service";
-import { CeoStoreClient, CeoStoreFulfillmentError } from "./ceo-store.client";
 
 @Injectable()
 export class SalesOrderService {
@@ -27,8 +26,6 @@ export class SalesOrderService {
     private readonly invoiceService: InvoiceService,
     private readonly stockReservation: StockReservationService,
   ) {}
-
-  private readonly ceoStore = new CeoStoreClient();
 
   async list(
     pagination: PaginationDto,
@@ -113,7 +110,7 @@ export class SalesOrderService {
     dto: CreateSalesOrderDto,
     actorUserId: string,
     idempotencyKey?: string,
-    options?: { online?: boolean; branchId?: string; retailerId?: string },
+    options?: { online?: boolean; branchId?: string; retailerId?: string; locationId?: string },
   ) {
     const online = options?.online === true;
     const branchId = options?.branchId ?? dto.branchId;
@@ -201,7 +198,7 @@ export class SalesOrderService {
             ? tx.route.findUnique({ where: { id: dto.routeId } })
             : null,
           tx.inventoryLocation.findFirst({
-            where: { branchId, status: "ACTIVE" },
+            where: { branchId, status: "ACTIVE", ...(options?.locationId ? { id: options.locationId } : {}) },
             orderBy: { createdAt: "asc" },
           }),
         ]);
@@ -468,25 +465,31 @@ export class SalesOrderService {
     dto: CreateSalesOrderDto,
     actorUserId: string,
     idempotencyKey: string,
-    options: { branchId: string; retailerId?: string },
+    options: { branchId: string; retailerId?: string; locationId?: string },
   ) {
     return this.create(dto, actorUserId, idempotencyKey, {
       online: true,
       branchId: options.branchId,
       retailerId: options.retailerId,
+      locationId: options.locationId,
     });
   }
 
   async createPublicOrder(dto: PublicCheckoutDto, headerIdempotencyKey?: string) {
     const systemUserId = "99999999-9999-4999-a999-999999999999";
     const idempotencyKey = headerIdempotencyKey ?? dto.idempotencyKey;
-    const branchId = dto.branchId ?? process.env.ONLINE_ORDER_BRANCH_ID;
     if (!idempotencyKey) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, "Idempotency-Key is required.", 422);
     }
-    if (!branchId) {
-      throw new AppError(ErrorCodes.VALIDATION_ERROR, "Online order branch is not configured.", 500);
+    const centralWarehouse = await this.prisma.warehouse.findFirst({
+      where: { status: "ACTIVE" },
+      include: { inventoryLocation: true },
+      orderBy: { createdAt: "asc" },
+    });
+    if (!centralWarehouse?.inventoryLocation || centralWarehouse.inventoryLocation.status !== "ACTIVE") {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, "Central Warehouse is not configured with an active inventory location.", 500);
     }
+    const branchId = centralWarehouse.branchId;
 
     const notes = JSON.stringify({
       name: `${dto.firstName} ${dto.lastName}`,
@@ -509,87 +512,15 @@ export class SalesOrderService {
       } as CreateSalesOrderDto,
       systemUserId,
       idempotencyKey,
-      { branchId },
+      { branchId, locationId: centralWarehouse.inventoryLocation.id },
     );
     if (order.status === "CANCELLED") {
       throw new AppError(ErrorCodes.CONFLICT, "This storefront order was already cancelled.", 409);
     }
-    try {
-      await this.ensureCeoStoreReservation(order);
-    } catch (error) {
-      if (error instanceof CeoStoreFulfillmentError && error.statusCode < 500) {
-        await this.cancel(order.id, systemUserId);
-        throw new AppError(ErrorCodes.VALIDATION_ERROR, error.message, error.statusCode);
-      }
-      if (error instanceof CeoStoreFulfillmentError) {
-        throw new AppError(ErrorCodes.TRANSACTION_FAILED, error.message, 503);
-      }
-      throw error;
-    }
     return order;
   }
 
-  private parsePublicNotes(order: any) {
-    try {
-      const parsed = JSON.parse(String(order.notes || "{}"));
-      return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
-    } catch {
-      return {};
-    }
-  }
-
-  private async ensureCeoStoreReservation(order: any) {
-    if (!this.ceoStore.isConfigured()) {
-      if (process.env.NODE_ENV === "production") {
-        throw new CeoStoreFulfillmentError("CEO store fulfillment integration is not configured.", 503);
-      }
-      return;
-    }
-    const notes = this.parsePublicNotes(order);
-    const branchCode = order.branch?.code;
-    if (!branchCode) throw new CeoStoreFulfillmentError("PASALO branch code is unavailable for CEO store routing.", 422);
-    const reservation = await this.ceoStore.reserve({
-      externalOrderId: String(notes.externalOrderId || order.id),
-      pasaloOrderId: String(order.id),
-      branchCode: String(branchCode),
-      customerName: notes.name ? String(notes.name) : undefined,
-      shippingAddress: notes.address ? String(notes.address) : undefined,
-      items: (order.items || []).map((item: any) => ({ productId: String(item.productId), quantity: Number(item.quantity) })),
-    });
-    if (reservation?.status === "CANCELLED") {
-      throw new CeoStoreFulfillmentError("CEO store fulfillment was already cancelled.", 409);
-    }
-  }
-
-  private async completeCeoStoreFulfillment(order: any) {
-    if (!this.ceoStore.isConfigured()) {
-      if (process.env.NODE_ENV === "production") {
-        throw new AppError(ErrorCodes.TRANSACTION_FAILED, "CEO store fulfillment integration is not configured.", 503);
-      }
-      return;
-    }
-    const notes = this.parsePublicNotes(order);
-    await this.ceoStore.complete(String(notes.externalOrderId || order.id));
-  }
-
   async cancelPublicOrder(id: string, actorUserId: string) {
-    const order = await this.findById(id);
-    if (order.source === OrderSource.STOREFRONT && !this.ceoStore.isConfigured() && process.env.NODE_ENV === "production") {
-      throw new AppError(ErrorCodes.TRANSACTION_FAILED, "CEO store fulfillment integration is not configured.", 503);
-    }
-    if (order.source === OrderSource.STOREFRONT && this.ceoStore.isConfigured()) {
-      const notes = this.parsePublicNotes(order);
-      try {
-        await this.ceoStore.cancel(String(notes.externalOrderId || order.id));
-      } catch (error) {
-        if (error instanceof CeoStoreFulfillmentError && error.statusCode >= 500) {
-          throw new AppError(ErrorCodes.TRANSACTION_FAILED, error.message, 503);
-        }
-        if (error instanceof CeoStoreFulfillmentError && error.statusCode !== 404) {
-          throw new AppError(ErrorCodes.CONFLICT, error.message, error.statusCode);
-        }
-      }
-    }
     return this.cancel(id, actorUserId);
   }
 
@@ -622,48 +553,50 @@ export class SalesOrderService {
 
   async updateStatus(
     id: string,
-    status: "PACKED" | "DELIVERED",
+    status: "PICKING" | "PACKED" | "DISPATCHED" | "DELIVERED",
     actorUserId: string,
   ) {
-    const order = await this.findById(id);
-    if (order.source !== "STOREFRONT") {
-      throw new AppError(
-        ErrorCodes.VALIDATION_ERROR,
-        "Only STOREFRONT orders can be progressed via this endpoint.",
-        422,
-      );
-    }
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ id: string; status: string; source: string; branchId: string | null }>>`
+        SELECT id, status, source, "branchId"
+        FROM "SalesOrder"
+        WHERE id = ${id}
+        FOR UPDATE
+      `;
+      const order = rows[0];
+      if (!order) throw new AppError(ErrorCodes.NOT_FOUND, "Sales order not found.", 404);
+      if (order.source !== "STOREFRONT") {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, "Only online orders can be progressed via this workflow.", 422);
+      }
+      if (order.status === status) return order;
 
-    const validTransitions = {
-      CONFIRMED: ["PACKED", "CANCELLED"],
-      PLACED: ["PACKED", "CANCELLED"],
-      PACKED: ["DELIVERED", "CANCELLED"],
-    };
-
-    const allowed = validTransitions[order.status] || [];
-    if (!allowed.includes(status)) {
-      throw new AppError(
-        ErrorCodes.VALIDATION_ERROR,
-        `Cannot transition order from ${order.status} to ${status}.`,
-        422,
-      );
-    }
-
-    if (status === "DELIVERED") {
-      await this.completeCeoStoreFulfillment(order);
-    }
-
-    await this.prisma.salesOrder.update({
-      where: { id },
-      data: { status },
+      const validTransitions: Record<string, string[]> = {
+        CONFIRMED: ["PICKING", "CANCELLED"],
+        PLACED: ["PICKING", "CANCELLED"],
+        PICKING: ["PACKED", "CANCELLED"],
+        PACKED: ["DISPATCHED", "CANCELLED"],
+        DISPATCHED: ["DELIVERED"],
+      };
+      if (!validTransitions[order.status]?.includes(status)) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, `Cannot transition order from ${order.status} to ${status}.`, 422);
+      }
+      if (status === "DISPATCHED") {
+        if (!order.branchId) throw new AppError(ErrorCodes.VALIDATION_ERROR, "Online order has no warehouse branch.", 422);
+        await this.stockReservation.consumeForOnlineDispatch(tx, {
+          salesOrderId: id,
+          branchId: order.branchId,
+          createdById: actorUserId,
+        });
+      }
+      return tx.salesOrder.update({ where: { id }, data: { status: status as any } });
     });
 
     await this.audit.record({
       actorUserId,
-      action: "SALES_ORDER_CONFIRMED", // Using existing audit action for simplicity
+      action: "SALES_ORDER_CONFIRMED",
       entityType: "SALES_ORDER",
       entityId: id,
-      branchId: order.branchId ?? undefined,
+      branchId: updated.branchId ?? undefined,
       afterData: { status },
     });
 
@@ -679,7 +612,7 @@ export class SalesOrderService {
       if (!order)
         throw new AppError(ErrorCodes.NOT_FOUND, "Sales order not found.", 404);
       if (order.status === "CANCELLED") return;
-      if (!["DRAFT", "CONFIRMED", "PLACED", "PACKED"].includes(order.status)) {
+      if (!["DRAFT", "CONFIRMED", "PLACED", "PICKING", "PACKED"].includes(order.status)) {
         throw new AppError(
           ErrorCodes.VALIDATION_ERROR,
           "Order cannot be cancelled in its current state.",

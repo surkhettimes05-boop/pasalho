@@ -501,6 +501,63 @@ export class StockReservationService {
     };
   }
 
+  async consumeForOnlineDispatch(
+    tx: Prisma.TransactionClient,
+    input: { salesOrderId: string; branchId: string; createdById: string },
+  ) {
+    const lockedReservations = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id
+      FROM "StockReservation"
+      WHERE "salesOrderId" = ${input.salesOrderId}
+        AND status = 'ACTIVE'::"StockReservationStatus"
+      FOR UPDATE
+    `;
+    if (lockedReservations.length === 0) {
+      const prior = await tx.stockReservation.findMany({
+        where: { salesOrderId: input.salesOrderId },
+        select: { status: true },
+      });
+      if (prior.length > 0 && prior.every((reservation) => reservation.status === StockReservationStatus.CONSUMED)) {
+        return { alreadyProcessed: true };
+      }
+      throw new AppError(ErrorCodes.CONFLICT, "No active warehouse reservation is available for this order.", 409);
+    }
+
+    const reservations = await tx.stockReservation.findMany({
+      where: { id: { in: lockedReservations.map((reservation) => reservation.id) } },
+      include: { items: true },
+    });
+    const movements = reservations.flatMap((reservation) => reservation.items.map((item) => ({
+      locationId: reservation.locationId,
+      productId: item.productId,
+      batchId: item.batchId ?? undefined,
+      unitId: item.unitId,
+      stockState: StockState.RESERVED,
+      quantityDelta: -Number(item.quantity),
+      baseQuantityDelta: -Number(item.baseQuantity),
+      movementType: "SALE_DEDUCTION" as const,
+      reasonCode: "ONLINE_ORDER_DISPATCHED",
+    })));
+    if (movements.length === 0) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, "The warehouse order reservation has no items.", 422);
+    }
+
+    const event = await this.ledger.postEvent({
+      eventType: "SALE_DEDUCTED",
+      branchId: input.branchId,
+      referenceType: "SALES_ORDER",
+      referenceId: input.salesOrderId,
+      createdById: input.createdById,
+      idempotencyKey: `online-order-dispatch-${input.salesOrderId}`,
+      movements,
+    }, tx);
+    await tx.stockReservation.updateMany({
+      where: { id: { in: reservations.map((reservation) => reservation.id) }, status: StockReservationStatus.ACTIVE },
+      data: { status: StockReservationStatus.CONSUMED, consumedAt: new Date() },
+    });
+    return { eventId: event.eventId, reservationIds: reservations.map((reservation) => reservation.id), movementCount: movements.length };
+  }
+
   /**
    * List all reserved stock for a location or branch.
    */

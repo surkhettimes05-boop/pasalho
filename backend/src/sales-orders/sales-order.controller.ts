@@ -162,11 +162,11 @@ export class SalesOrderController {
   @RequirePermissions("sales-orders.create")
   @RequireScope("order")
   @ApiOperation({
-    summary: "Update storefront order status (PACKED or DELIVERED)",
+    summary: "Progress online warehouse order picking, packing, dispatch, and delivery",
   })
   updateStatus(
     @Param("id") id: string,
-    @Body("status") status: "PACKED" | "DELIVERED",
+    @Body("status") status: "PICKING" | "PACKED" | "DISPATCHED" | "DELIVERED",
     @CurrentUser() actor: User,
   ) {
     return this.salesOrderService.updateStatus(id, status, actor.id);

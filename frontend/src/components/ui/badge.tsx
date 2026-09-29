@@ -34,8 +34,8 @@ export function Badge({
 
 export function statusVariant(status: string): Variant {
   const s = status.toUpperCase();
-  if (['ACTIVE', 'PAID', 'POSTED', 'AVAILABLE', 'SUCCESS'].includes(s)) return 'green';
-  if (['DRAFT', 'PENDING', 'IN_TRANSIT', 'RESERVED'].includes(s)) return 'yellow';
+  if (['ACTIVE', 'PAID', 'POSTED', 'AVAILABLE', 'SUCCESS', 'DELIVERED'].includes(s)) return 'green';
+  if (['DRAFT', 'PENDING', 'IN_TRANSIT', 'RESERVED', 'CONFIRMED', 'PICKING', 'PACKED', 'DISPATCHED'].includes(s)) return 'yellow';
   if (['VOIDED', 'CANCELLED', 'EXPIRED', 'SUSPENDED', 'DAMAGED', 'BLOCKED'].includes(s)) return 'red';
   if (['PARTIALLY_PAID', 'CREDIT_OPEN'].includes(s)) return 'blue';
   return 'gray';
