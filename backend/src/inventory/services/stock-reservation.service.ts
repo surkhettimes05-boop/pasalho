@@ -26,6 +26,12 @@ export interface ReleaseReservationInput {
   reason?: string;
 }
 
+export interface ReserveSalesOrderItemInput extends ReserveStockInput {
+  salesOrderItemId: string;
+  reservationId: string;
+  isBatchTracked: boolean;
+}
+
 @Injectable()
 export class StockReservationService {
   constructor(
@@ -33,6 +39,74 @@ export class StockReservationService {
     private readonly ledger: InventoryLedgerService,
     private readonly audit: AuditLogService,
   ) {}
+
+  /** Reserve one sales-order line, allocating eligible batches when the
+   * caller did not choose one. The caller's transaction makes allocation,
+   * ledger movements, order and reservation records atomic. */
+  async reserveSalesOrderItem(
+    input: ReserveSalesOrderItemInput,
+    transaction: Prisma.TransactionClient,
+  ) {
+    const allocations: Array<{ batchId?: string; quantity: number; baseQuantity: number }> = [];
+
+    if (!input.isBatchTracked || input.batchId) {
+      allocations.push({ batchId: input.batchId, quantity: input.quantity, baseQuantity: input.baseQuantity });
+    } else {
+      const candidates = await transaction.$queryRaw<Array<{
+        batchId: string;
+        quantity: string;
+        baseQuantity: string;
+      }>>`
+        SELECT s."batchId", s.quantity::text AS quantity, s."baseQuantity"::text AS "baseQuantity"
+        FROM "InventorySnapshot" s
+        JOIN "Batch" b ON b.id = s."batchId"
+        WHERE s."locationId" = ${input.locationId}
+          AND s."productId" = ${input.productId}
+          AND s."unitId" = ${input.unitId}
+          AND s."stockState" = 'AVAILABLE'::"StockState"
+          AND s."baseQuantity" > 0
+          AND b.status = 'ACTIVE'::"BatchStatus"
+          AND (b."expiryDate" IS NULL OR b."expiryDate"::date >= CURRENT_DATE)
+        ORDER BY b."expiryDate" ASC NULLS LAST, b."createdAt" ASC, b.id ASC
+        FOR UPDATE OF s
+      `;
+
+      const totalAvailable = candidates.reduce((total, candidate) => total + Number(candidate.baseQuantity), 0);
+      if (totalAvailable < input.baseQuantity) {
+        throw new AppError(
+          ErrorCodes.INSUFFICIENT_STOCK,
+          `Insufficient eligible batch stock. Have ${totalAvailable}, need ${input.baseQuantity}.`,
+          422,
+        );
+      }
+
+      let remainingBase = input.baseQuantity;
+      for (const candidate of candidates) {
+        if (remainingBase <= 0) break;
+        const allocatedBase = Math.min(remainingBase, Number(candidate.baseQuantity));
+        const allocatedQuantity = input.quantity * (allocatedBase / input.baseQuantity);
+        allocations.push({ batchId: candidate.batchId, quantity: allocatedQuantity, baseQuantity: allocatedBase });
+        remainingBase -= allocatedBase;
+      }
+    }
+
+    for (const allocation of allocations) {
+      await this.reserveStock({ ...input, ...allocation }, transaction, false);
+      await transaction.stockReservationItem.create({
+        data: {
+          reservationId: input.reservationId,
+          salesOrderItemId: input.salesOrderItemId,
+          productId: input.productId,
+          batchId: allocation.batchId,
+          unitId: input.unitId,
+          quantity: allocation.quantity,
+          baseQuantity: allocation.baseQuantity,
+        },
+      });
+    }
+
+    return allocations;
+  }
 
   /**
    * Reserve stock for a pending operation (e.g. invoice being created, transfer pending).

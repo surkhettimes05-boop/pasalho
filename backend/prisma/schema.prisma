@@ -1593,7 +1593,7 @@ model StockReservationItem {
   batch          Batch?           @relation(fields: [batchId], references: [id], onDelete: Restrict)
   unit           Unit             @relation(fields: [unitId], references: [id], onDelete: Restrict)
 
-  @@unique([reservationId, salesOrderItemId])
+  @@index([reservationId, salesOrderItemId])
   @@index([salesOrderItemId])
   @@index([productId, batchId])
 }

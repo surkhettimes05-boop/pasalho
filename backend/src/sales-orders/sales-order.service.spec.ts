@@ -60,6 +60,7 @@ function makeService(overrides: Record<string, any> = {}) {
           id: "product-1",
           name: "Product",
           isActive: true,
+          isBatchTracked: true,
           sellingPrice: 25,
           productUnits: [{ unitId: "unit-1", conversionToBase: 12 }],
         }),
@@ -88,7 +89,7 @@ function makeService(overrides: Record<string, any> = {}) {
     $queryRaw: jest.fn().mockResolvedValue([{ creditLimit: 1000 }]),
   };
   const prisma: any = { $transaction: jest.fn((callback) => callback(tx)) };
-  const reservation: any = { reserveStock: jest.fn().mockResolvedValue({}) };
+  const reservation: any = { reserveSalesOrderItem: jest.fn().mockResolvedValue([]) };
   const audit: any = { record: jest.fn() };
   const invoice: any = {};
   const service = new SalesOrderService(prisma, audit, invoice, reservation);
@@ -122,10 +123,9 @@ describe("SalesOrderService.create", () => {
         }),
       }),
     );
-    expect(reservation.reserveStock).toHaveBeenCalledWith(
-      expect.objectContaining({ quantity: 2, baseQuantity: 24 }),
+    expect(reservation.reserveSalesOrderItem).toHaveBeenCalledWith(
+      expect.objectContaining({ quantity: 2, baseQuantity: 24, isBatchTracked: true }),
       tx,
-      false,
     );
   });
 
@@ -177,12 +177,12 @@ describe("SalesOrderService.create", () => {
       ),
     ).resolves.toEqual({ id: "order-1" });
     expect(tx.salesOrder.create).toHaveBeenCalledTimes(1);
-    expect(reservation.reserveStock).toHaveBeenCalledTimes(1);
+    expect(reservation.reserveSalesOrderItem).toHaveBeenCalledTimes(1);
   });
 
   it("propagates insufficient available stock and rolls back order creation", async () => {
     const { service, tx, reservation } = makeService();
-    reservation.reserveStock.mockRejectedValue(
+    reservation.reserveSalesOrderItem.mockRejectedValue(
       new AppError("INSUFFICIENT_STOCK", "Insufficient available stock.", 422),
     );
 

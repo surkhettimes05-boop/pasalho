@@ -9,6 +9,7 @@ import { SalesOrderService } from "../src/sales-orders/sales-order.service";
 import { CreateSalesOrderDto } from "../src/sales-orders/dto/create-sales-order.dto";
 import { RetailerNotificationService } from "../src/retailer-portal/retailer-notification.service";
 import { RetailerOrderService } from "../src/retailer-portal/retailer-order.service";
+import { FranchiseService } from "../src/franchise/franchise.service";
 
 describe("Sales-order transaction (real PostgreSQL)", () => {
   let prisma: PrismaService;
@@ -25,6 +26,9 @@ describe("Sales-order transaction (real PostgreSQL)", () => {
   let unitId: string;
   let invoiceService: InvoiceService;
   let retailerOrders: RetailerOrderService;
+  let franchiseOrderId: string | undefined;
+  let franchiseStoreId: string | undefined;
+  let franchisePartnerId: string | undefined;
   const prefix = `sales-order-it-${Date.now()}-${randomUUID().slice(0, 8)}`;
 
   const dto = (quantity: number, idempotencyKey: string): CreateSalesOrderDto => ({
@@ -72,7 +76,58 @@ describe("Sales-order transaction (real PostgreSQL)", () => {
     });
   };
 
+  const seedBatchStock = async (batches: Array<{ name: string; quantity: number; expiryDate?: Date; status?: "ACTIVE" | "BLOCKED" | "EXPIRED" }>) => {
+    await prisma.product.update({ where: { id: productId }, data: { isBatchTracked: true, isExpiryTracked: true } });
+    for (const batchInput of batches) {
+      const batch = await prisma.batch.create({
+        data: {
+          productId,
+          batchNumber: `${prefix}-${batchInput.name}`,
+          expiryDate: batchInput.expiryDate,
+          status: batchInput.status ?? "ACTIVE",
+        },
+      });
+      await new InventoryLedgerService(prisma).postEvent({
+        eventType: "OPENING_STOCK",
+        branchId,
+        referenceType: "STOCK_ADJUSTMENT",
+        referenceId: `${prefix}-opening-${batchInput.name}-${randomUUID()}`,
+        createdById: userId,
+        movements: [{
+          locationId,
+          productId,
+          batchId: batch.id,
+          unitId,
+          stockState: "AVAILABLE",
+          quantityDelta: batchInput.quantity,
+          baseQuantityDelta: batchInput.quantity,
+          movementType: "STOCK_IN",
+        }],
+      });
+    }
+  };
+
+  const batchBalances = async () => prisma.inventorySnapshot.findMany({
+    where: { locationId, productId },
+    select: { batchId: true, stockState: true, baseQuantity: true },
+    orderBy: [{ batchId: "asc" }, { stockState: "asc" }],
+  });
+
   const resetInventory = async () => {
+    if (franchiseOrderId) {
+      await prisma.franchiseSupplyOrderItem.deleteMany({ where: { orderId: franchiseOrderId } });
+      await prisma.franchiseSupplyOrderEvent.deleteMany({ where: { orderId: franchiseOrderId } });
+      await prisma.franchiseSupplyOrder.deleteMany({ where: { id: franchiseOrderId } });
+      franchiseOrderId = undefined;
+    }
+    if (franchiseStoreId) {
+      await prisma.franchiseStore.deleteMany({ where: { id: franchiseStoreId } });
+      franchiseStoreId = undefined;
+    }
+    if (franchisePartnerId) {
+      await prisma.franchisePartner.deleteMany({ where: { id: franchisePartnerId } });
+      franchisePartnerId = undefined;
+    }
     await prisma.retailerNotification.deleteMany({ where: { branchId } });
     await prisma.retailerLedgerEntry.deleteMany({ where: { branchId } });
     await prisma.financialLedgerEntry.deleteMany({ where: { branchId } });
@@ -88,6 +143,8 @@ describe("Sales-order transaction (real PostgreSQL)", () => {
     await prisma.inventoryMovement.deleteMany({ where: { branchId } });
     await prisma.inventoryEvent.deleteMany({ where: { branchId } });
     await prisma.inventorySnapshot.deleteMany({ where: { locationId } });
+    await prisma.batch.deleteMany({ where: { productId } });
+    await prisma.product.update({ where: { id: productId }, data: { isBatchTracked: false, isExpiryTracked: false } });
   };
 
   const snapshotBalances = async () => {
@@ -148,6 +205,7 @@ describe("Sales-order transaction (real PostgreSQL)", () => {
         categoryId: category.id,
         defaultUnitId: unit.id,
         sellingPrice: 10,
+        isBatchTracked: false,
         productUnits: {
           create: { unitId: unit.id, conversionToBase: 1, isBaseUnit: true },
         },
@@ -179,6 +237,9 @@ describe("Sales-order transaction (real PostgreSQL)", () => {
         branchId,
         code: `${prefix}-warehouse`,
         name: "Sales order integration warehouse",
+        // Public order/franchise paths select the oldest active warehouse as
+        // the central warehouse; keep this isolated fixture deterministic.
+        createdAt: new Date("2000-01-01T00:00:00Z"),
       },
     });
     warehouseId = warehouse.id;
@@ -275,6 +336,7 @@ describe("Sales-order transaction (real PostgreSQL)", () => {
     await prisma.inventoryMovement.deleteMany({ where: { branchId } });
     await prisma.inventoryEvent.deleteMany({ where: { branchId } });
     await prisma.inventorySnapshot.deleteMany({ where: { locationId } });
+    await prisma.batch.deleteMany({ where: { productId } });
     await prisma.routeStop.deleteMany({ where: { routeId } });
     await prisma.route.delete({ where: { id: routeId } });
     await prisma.salesRep.delete({ where: { id: salesRepId } });
@@ -732,5 +794,168 @@ describe("Sales-order transaction (real PostgreSQL)", () => {
     expect(await prisma.stockReservation.count({ where: { salesOrder: { branchId } } })).toBe(1);
     expect((await snapshotBalances()).get("RESERVED")).toBe(5);
     expect((await snapshotBalances()).get("AVAILABLE") ?? 0).toBe(0);
+  });
+
+  it("reserves a batch-tracked sales order from a single eligible batch", async () => {
+    await seedBatchStock([{ name: "single", quantity: 80, expiryDate: new Date("2027-11-01T00:00:00Z") }]);
+    const key = `${prefix}-batch-single`;
+    const order = (await salesOrders.createPublicOrder({
+      firstName: "Batch", lastName: "Customer", phone: `${Date.now()}`.slice(-10),
+      address: "Batch address", idempotencyKey: key, items: [{ productId, quantity: 10 }],
+    }, key)) as any;
+    const allocations = await prisma.stockReservationItem.findMany({ where: { reservation: { salesOrderId: order.id } } });
+    expect(allocations).toHaveLength(1);
+    expect(Number(allocations[0].baseQuantity)).toBe(10);
+    expect((await batchBalances()).map((row) => [row.stockState, Number(row.baseQuantity)])).toEqual([["AVAILABLE", 70], ["RESERVED", 10]]);
+  });
+
+  it("allocates multiple batches in FEFO order and persists both allocations", async () => {
+    await seedBatchStock([
+      { name: "later", quantity: 20, expiryDate: new Date("2027-01-01T00:00:00Z") },
+      { name: "earlier", quantity: 6, expiryDate: new Date("2026-11-01T00:00:00Z") },
+    ]);
+    const key = `${prefix}-batch-fefo`;
+    const order = (await salesOrders.createPublicOrder({
+      firstName: "FEFO", lastName: "Customer", phone: `${Date.now()}`.slice(-10),
+      address: "Batch address", idempotencyKey: key, items: [{ productId, quantity: 10 }],
+    }, key)) as any;
+    const allocations = await prisma.stockReservationItem.findMany({
+      where: { reservation: { salesOrderId: order.id } },
+      include: { batch: { select: { batchNumber: true } } },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(allocations.map((row) => [row.batch?.batchNumber, Number(row.baseQuantity)])).toEqual([
+      [`${prefix}-earlier`, 6], [`${prefix}-later`, 4],
+    ]);
+  });
+
+  it("rejects insufficient total eligible batch stock without partial records or ledger movements", async () => {
+    await seedBatchStock([
+      { name: "short-a", quantity: 4, expiryDate: new Date("2027-01-01T00:00:00Z") },
+      { name: "short-b", quantity: 5, expiryDate: new Date("2027-02-01T00:00:00Z") },
+    ]);
+    const before = await movementCount();
+    const key = `${prefix}-batch-insufficient`;
+    await expect(salesOrders.createPublicOrder({
+      firstName: "Short", lastName: "Customer", phone: `${Date.now()}`.slice(-10),
+      address: "Batch address", idempotencyKey: key, items: [{ productId, quantity: 10 }],
+    }, key)).rejects.toMatchObject({ code: "INSUFFICIENT_STOCK" });
+    expect(await prisma.salesOrder.count({ where: { branchId } })).toBe(0);
+    expect(await prisma.stockReservation.count({ where: { salesOrder: { branchId } } })).toBe(0);
+    expect(await movementCount()).toBe(before);
+    expect((await batchBalances()).filter((row) => row.stockState === "RESERVED")).toHaveLength(0);
+  });
+
+  it("does not allocate expired or blocked batches", async () => {
+    await seedBatchStock([
+      { name: "expired", quantity: 100, expiryDate: new Date(Date.now() - 86_400_000) },
+      { name: "blocked", quantity: 100, expiryDate: new Date("2027-01-01T00:00:00Z"), status: "BLOCKED" },
+      { name: "valid-short", quantity: 5, expiryDate: new Date("2027-02-01T00:00:00Z") },
+    ]);
+    const key = `${prefix}-batch-expired`;
+    await expect(salesOrders.createPublicOrder({
+      firstName: "Expiry", lastName: "Customer", phone: `${Date.now()}`.slice(-10),
+      address: "Batch address", idempotencyKey: key, items: [{ productId, quantity: 10 }],
+    }, key)).rejects.toMatchObject({ code: "INSUFFICIENT_STOCK" });
+  });
+
+  it("preserves an explicitly selected batch without substituting another", async () => {
+    await seedBatchStock([
+      { name: "explicit", quantity: 10, expiryDate: new Date("2027-01-01T00:00:00Z") },
+      { name: "not-selected", quantity: 20, expiryDate: new Date("2027-02-01T00:00:00Z") },
+    ]);
+    const batch = await prisma.batch.findFirstOrThrow({ where: { productId, batchNumber: `${prefix}-explicit` } });
+    const key = `${prefix}-batch-explicit`;
+    const order = (await salesOrders.create({
+      ...dto(4, key), items: [{ productId, unitId, quantity: 4, batchId: batch.id }],
+    }, userId, key)) as any;
+    const allocations = await prisma.stockReservationItem.findMany({ where: { reservation: { salesOrderId: order.id } } });
+    expect(allocations).toHaveLength(1);
+    expect(allocations[0].batchId).toBe(batch.id);
+    expect(Number(allocations[0].baseQuantity)).toBe(4);
+  });
+
+  it("reserves, dispatches, and replays a batch-tracked franchise order exactly once", async () => {
+    await seedBatchStock([{ name: "franchise", quantity: 80, expiryDate: new Date("2027-01-01T00:00:00Z") }]);
+    const franchise = new FranchiseService(prisma, salesOrders);
+    const partner = await franchise.createPartner({ name: `${prefix} partner`, phone: "9800000000" });
+    franchisePartnerId = String((partner as any).id);
+    const store = await franchise.createStore({ partnerId: String((partner as any).id), name: `${prefix} franchise`, address: "Test" });
+    franchiseStoreId = String((store as any).id);
+    const supply = await franchise.createSupplyOrder({
+      storeId: String((store as any).id), items: [{ productId, unitId, quantity: 10 }],
+    }, userId);
+    franchiseOrderId = String((supply as any).id);
+    const approved = await franchise.transition(String((supply as any).id), "approve", userId);
+    const salesOrderId = String((approved as any).salesOrderId);
+    expect((await batchBalances()).map((row) => [row.stockState, Number(row.baseQuantity)])).toEqual([["AVAILABLE", 70], ["RESERVED", 10]]);
+    await franchise.transition(String((supply as any).id), "pick", userId);
+    await franchise.transition(String((supply as any).id), "pack", userId);
+    await franchise.transition(String((supply as any).id), "dispatch", userId);
+    await franchise.transition(String((supply as any).id), "dispatch", userId);
+    expect((await prisma.stockReservation.findFirstOrThrow({ where: { salesOrderId } })).status).toBe("CONSUMED");
+    expect((await batchBalances())
+      .filter((row) => Number(row.baseQuantity) > 0)
+      .map((row) => [row.stockState, Number(row.baseQuantity)])).toEqual([["AVAILABLE", 70]]);
+  });
+
+  it("allocates public online and B2B orders through the shared allocator", async () => {
+    await seedBatchStock([
+      { name: "channels-a", quantity: 6, expiryDate: new Date("2027-01-01T00:00:00Z") },
+      { name: "channels-b", quantity: 20, expiryDate: new Date("2027-02-01T00:00:00Z") },
+    ]);
+    const onlineKey = `${prefix}-batch-online`;
+    const online = (await salesOrders.createPublicOrder({
+      firstName: "Online", lastName: "Customer", phone: `${Date.now()}`.slice(-10),
+      address: "Batch address", idempotencyKey: onlineKey, items: [{ productId, quantity: 10 }],
+    }, onlineKey)) as any;
+    const onlineLines = await prisma.stockReservationItem.findMany({ where: { reservation: { salesOrderId: online.id } } });
+    expect(onlineLines.map((line) => Number(line.baseQuantity))).toEqual([6, 4]);
+
+    const b2bKey = `${prefix}-batch-b2b`;
+    const b2b = (await retailerOrders.placeOrder(retailerId, [{ productId, unitId, quantity: 5 }], undefined, b2bKey)) as any;
+    const b2bLines = await prisma.stockReservationItem.findMany({ where: { reservation: { salesOrderId: b2b.id } } });
+    expect(b2bLines.reduce((sum, line) => sum + Number(line.baseQuantity), 0)).toBe(5);
+    expect(b2bLines.every((line) => Boolean(line.batchId))).toBe(true);
+  });
+
+  it("releases multi-batch reservations on cancellation and makes cancellation replay safe", async () => {
+    await seedBatchStock([
+      { name: "cancel-a", quantity: 6, expiryDate: new Date("2027-01-01T00:00:00Z") },
+      { name: "cancel-b", quantity: 20, expiryDate: new Date("2027-02-01T00:00:00Z") },
+    ]);
+    const key = `${prefix}-batch-cancel`;
+    const order = (await salesOrders.createPublicOrder({
+      firstName: "Cancel", lastName: "Customer", phone: `${Date.now()}`.slice(-10),
+      address: "Batch address", idempotencyKey: key, items: [{ productId, quantity: 10 }],
+    }, key)) as any;
+    const beforeCancel = await movementCount();
+    await salesOrders.cancel(order.id, userId);
+    const afterCancel = await movementCount();
+    await salesOrders.cancel(order.id, userId);
+    expect(await movementCount()).toBe(afterCancel);
+    expect(afterCancel).toBe(beforeCancel + 4);
+    expect((await prisma.stockReservation.findFirstOrThrow({ where: { salesOrderId: order.id } })).status).toBe("RELEASED");
+    expect((await batchBalances()).filter((row) => row.stockState === "AVAILABLE").reduce((sum, row) => sum + Number(row.baseQuantity), 0)).toBe(26);
+    expect((await batchBalances()).filter((row) => row.stockState === "RESERVED")).toHaveLength(0);
+  });
+
+  it("does not oversubscribe competing orders across batch snapshots", async () => {
+    await seedBatchStock([
+      { name: "race-a", quantity: 6, expiryDate: new Date("2027-01-01T00:00:00Z") },
+      { name: "race-b", quantity: 4, expiryDate: new Date("2027-02-01T00:00:00Z") },
+    ]);
+    const makeInput = (key: string) => ({
+      firstName: "Race", lastName: "Customer", phone: `${Date.now()}${key.slice(-1)}`.slice(-10),
+      address: "Batch address", idempotencyKey: key, items: [{ productId, quantity: 8 }],
+    });
+    const results = await Promise.allSettled([
+      salesOrders.createPublicOrder(makeInput(`${prefix}-batch-race-a`), `${prefix}-batch-race-a`),
+      salesOrders.createPublicOrder(makeInput(`${prefix}-batch-race-b`), `${prefix}-batch-race-b`),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect((await batchBalances()).filter((row) => row.stockState === "RESERVED").reduce((sum, row) => sum + Number(row.baseQuantity), 0)).toBe(8);
+    expect((await batchBalances()).filter((row) => row.stockState === "AVAILABLE").reduce((sum, row) => sum + Number(row.baseQuantity), 0)).toBe(2);
   });
 });

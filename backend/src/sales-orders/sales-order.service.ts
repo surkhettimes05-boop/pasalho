@@ -310,6 +310,7 @@ export class SalesOrderService {
           subtotal += lineTotal;
           validatedItems.push({
             productId: product.id,
+            isBatchTracked: product.isBatchTracked,
             batchId: item.batchId,
             unitId: productUnit.unitId,
             quantity: item.quantity,
@@ -368,14 +369,22 @@ export class SalesOrderService {
           },
         });
 
-        for (const item of validatedItems) {
+        // Acquire inventory rows in a stable order across multi-line orders to
+        // reduce deadlocks when concurrent requests contain the same products.
+        const reservationItems = [...validatedItems].sort((a, b) =>
+          a.productId.localeCompare(b.productId) ||
+          a.unitId.localeCompare(b.unitId) ||
+          String(a.batchId ?? "").localeCompare(String(b.batchId ?? "")),
+        );
+        for (const item of reservationItems) {
+          const { isBatchTracked, ...orderItemData } = item;
           const orderItem = await tx.salesOrderItem.create({
             data: {
               salesOrderId: o.id,
-              ...item,
+              ...orderItemData,
             },
           });
-          await this.stockReservation.reserveStock(
+          await this.stockReservation.reserveSalesOrderItem(
             {
               branchId,
               locationId: location.id,
@@ -384,25 +393,16 @@ export class SalesOrderService {
               unitId: item.unitId,
               quantity: item.quantity,
               baseQuantity: item.baseQuantity,
+              isBatchTracked,
+              reservationId: reservation.id,
+              salesOrderItemId: orderItem.id,
               referenceType: ReferenceType.SALES_ORDER,
               referenceId: o.id,
               createdById: actorUserId,
               reason: "Sales order reservation",
             },
             tx,
-            false,
           );
-          await tx.stockReservationItem.create({
-            data: {
-              reservationId: reservation.id,
-              salesOrderItemId: orderItem.id,
-              productId: item.productId,
-              batchId: item.batchId,
-              unitId: item.unitId,
-              quantity: item.quantity,
-              baseQuantity: item.baseQuantity,
-            },
-          });
         }
 
         await tx.idempotencyRecord.update({
