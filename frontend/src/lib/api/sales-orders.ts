@@ -35,7 +35,7 @@ export interface SalesOrder {
   subtotal: number | string;
   grandTotal: number | string;
   invoiceId?: string;
-  invoice?: { id: string; invoiceNumber: string; status: string; grandTotal: number | string };
+  invoice?: { id: string; invoiceNumber: string; status: string; paymentStatus?: string; paidAmount?: number | string; grandTotal: number | string };
   createdBy: { id: string; fullName: string };
   confirmedAt?: string;
   createdAt: string;
@@ -52,6 +52,7 @@ export const salesOrdersApi = {
     limit?: number;
     search?: string;
     source?: string;
+    retailerOrder?: boolean;
   }): Promise<PaginatedResponse<SalesOrder>> {
     const q = new URLSearchParams();
     if (params?.branchId) q.set('branchId', params.branchId);
@@ -61,6 +62,7 @@ export const salesOrdersApi = {
     if (params?.limit) q.set('limit', String(params.limit));
     if (params?.search) q.set('search', params.search);
     if (params?.source) q.set('source', params.source);
+    if (params?.retailerOrder !== undefined) q.set('retailerOrder', String(params.retailerOrder));
     return api.get(`/sales-orders?${q}`);
   },
 

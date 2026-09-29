@@ -49,6 +49,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
 
   if (isLoading) return <Spinner />;
   if (!order) return <div className="py-12 text-center text-gray-500">Order not found.</div>;
+  const centralRetailerOrder = order.source === 'DNP' && Boolean(order.retailerId);
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
@@ -157,21 +158,24 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         </div>
       )}
 
-      {order.source === 'STOREFRONT' && order.status !== 'DELIVERED' && order.status !== 'CANCELLED' && (
+      {(order.source === 'STOREFRONT' || centralRetailerOrder) && order.status !== 'DELIVERED' && order.status !== 'CANCELLED' && (
         <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
-          <p className="mb-3 text-sm text-blue-900">Online order · Central Warehouse fulfillment. Warehouse stock is deducted when the order is dispatched.</p>
+          <p className="mb-3 text-sm text-blue-900">{centralRetailerOrder ? 'B2B retailer order · Central Warehouse fulfillment.' : 'Online order · Central Warehouse fulfillment.'} Warehouse stock is deducted once when goods are invoiced or dispatched.</p>
           <div className="flex flex-wrap gap-3">
             {order.status === 'CONFIRMED' && <Button onClick={() => fulfillmentMutation.mutate('PICKING')} disabled={fulfillmentMutation.isPending}>Start picking</Button>}
             {order.status === 'PICKING' && <Button onClick={() => fulfillmentMutation.mutate('PACKED')} disabled={fulfillmentMutation.isPending}>Finish packing</Button>}
-            {order.status === 'PACKED' && <Button onClick={() => fulfillmentMutation.mutate('DISPATCHED')} disabled={fulfillmentMutation.isPending}>Dispatch order</Button>}
+            {order.status === 'PACKED' && centralRetailerOrder && !order.invoiceId && <Button onClick={() => setShowConvertModal(true)}>Create invoice</Button>}
+            {order.status === 'PACKED' && !centralRetailerOrder && <Button onClick={() => fulfillmentMutation.mutate('DISPATCHED')} disabled={fulfillmentMutation.isPending}>Dispatch order</Button>}
+            {order.status === 'INVOICED' && centralRetailerOrder && <Button onClick={() => fulfillmentMutation.mutate('DISPATCHED')} disabled={fulfillmentMutation.isPending || !['CREDIT_OPEN', 'POSTED'].includes(order.invoice?.status ?? '')}>Dispatch invoiced order</Button>}
             {order.status === 'DISPATCHED' && <Button onClick={() => fulfillmentMutation.mutate('DELIVERED')} disabled={fulfillmentMutation.isPending}>Mark delivered</Button>}
-            {['CONFIRMED', 'PICKING', 'PACKED'].includes(order.status) && <Button variant="outline" onClick={() => { if (confirm('Cancel this online order and release its warehouse reservation?')) cancelMutation.mutate(); }} disabled={cancelMutation.isPending}>Cancel order</Button>}
+            {['CONFIRMED', 'PICKING', 'PACKED'].includes(order.status) && <Button variant="outline" onClick={() => { if (confirm('Cancel this order and release its warehouse reservation?')) cancelMutation.mutate(); }} disabled={cancelMutation.isPending}>Cancel order</Button>}
           </div>
+          {centralRetailerOrder && order.invoiceId && <p className="mt-3 text-sm text-slate-700">Invoice {order.invoice?.invoiceNumber ?? 'created'} · {order.invoice?.status ?? 'status unavailable'}. Post the invoice before dispatch.</p>}
           {fulfillmentMutation.isError && <p role="alert" className="mt-3 text-sm text-red-700">{(fulfillmentMutation.error as Error).message}</p>}
         </div>
       )}
 
-      {order.source !== 'STOREFRONT' && order.status === 'CONFIRMED' && !order.invoiceId && (
+      {order.source !== 'STOREFRONT' && !centralRetailerOrder && order.status === 'CONFIRMED' && !order.invoiceId && (
         <div className="rounded-lg border border-green-200 bg-green-50 p-4">
           <p className="mb-3 text-sm text-green-800">Order confirmed. Convert to invoice to process stock deduction.</p>
           <Button onClick={() => setShowConvertModal(true)}>Convert to Invoice</Button>

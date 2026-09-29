@@ -10,7 +10,7 @@ import { Badge, statusVariant } from '@/components/ui/badge';
 import { transferApi, StockTransfer } from '@/lib/api/inventory';
 import { formatDate } from '@/lib/utils/cn';
 
-const STATUS_FILTERS = ['ALL', 'DRAFT', 'SHIPPED', 'RECEIVED', 'CANCELLED'];
+const STATUS_FILTERS = ['ALL', 'DRAFT', 'CONFIRMED', 'IN_TRANSIT', 'SHIPPED', 'RECEIVED', 'CANCELLED'];
 
 export default function TransfersListPage() {
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -38,11 +38,11 @@ export default function TransfersListPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Stock Transfers</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Warehouse-to-warehouse and branch-to-branch transfers
+            Stores can request stock here. Dispatch reduces warehouse stock; store stock increases only when goods are physically received.
           </p>
         </div>
         <Link href="/transfers/new">
-          <Button>+ New Transfer</Button>
+          <Button>+ Request Stock</Button>
         </Link>
       </div>
 

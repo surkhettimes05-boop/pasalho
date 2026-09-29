@@ -10,7 +10,7 @@ import { formatCurrency, formatDate } from '@/lib/utils/cn';
 export default function OnlineOutboundPage() {
   const { data, isLoading, isError } = useQuery({
     queryKey: ['warehouse-outbound-online'],
-    queryFn: () => salesOrdersApi.list({ source: 'STOREFRONT', limit: 100 }),
+    queryFn: () => salesOrdersApi.list({ source: 'STOREFRONT', retailerOrder: false, limit: 100 }),
     refetchInterval: 30_000,
   });
   const orders = (data?.items ?? []).filter((order) => order.status !== 'CANCELLED' && order.status !== 'DELIVERED');
@@ -20,6 +20,12 @@ export default function OnlineOutboundPage() {
       <p className="text-sm font-semibold uppercase tracking-wide text-blue-700">Warehouse · Outbound</p>
       <h1 className="mt-1 text-2xl font-bold text-slate-900">Online Orders</h1>
       <p className="mt-1 text-sm text-slate-600">Online orders reserve Central Warehouse stock. Inventory is deducted once when an order is dispatched.</p>
+      <nav aria-label="Outbound order type" className="mt-4 flex flex-wrap gap-2">
+        <Link className="rounded-md bg-blue-700 px-3 py-2 text-sm font-semibold text-white" href="/warehouse/outbound">Online Orders</Link>
+        <Link className="rounded-md border bg-white px-3 py-2 text-sm font-semibold" href="/warehouse/outbound/stores">Store Orders</Link>
+        <Link className="rounded-md border bg-white px-3 py-2 text-sm font-semibold" href="/warehouse/outbound/b2b">B2B Orders</Link>
+        <Link className="rounded-md border bg-white px-3 py-2 text-sm font-semibold" href="/warehouse/outbound/franchise">Franchise Orders</Link>
+      </nav>
     </header>
     {isLoading ? <Spinner /> : isError ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">Online orders could not be loaded. Check warehouse access and try again.</p> : orders.length === 0 ? <div className="rounded-lg border bg-white p-8 text-center text-sm text-slate-500">No online orders are waiting for warehouse fulfillment.</div> : <div className="overflow-x-auto rounded-lg border bg-white">
       <table className="w-full text-left text-sm">

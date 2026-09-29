@@ -40,7 +40,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <SectionLabel>Organisation</SectionLabel>
           <NavItem href="/branches"   label="Branches" />
           <NavItem href="/warehouses" label="Warehouses" />
-          <NavItem href="/warehouse/outbound" label="Online Outbound" />
+          <NavItem href="/warehouse/outbound" label="Warehouse Outbound" />
 
           <SectionLabel>Catalog &amp; Stock</SectionLabel>
           <NavItem href="/products"           label="Products" />
@@ -50,12 +50,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <NavItem href="/stock/damage"       label="Damage Reports" />
           <NavItem href="/stock/expiry"       label="Expiry Dashboard" />
           <NavItem href="/transfers"          label="Transfers" />
+          <NavItem href="/suppliers"          label="Suppliers" />
+          <NavItem href="/purchase-orders"    label="Purchase Orders" />
+
+          <SectionLabel>Franchise</SectionLabel>
+          <NavItem href="/franchise" label="Franchise Overview" />
+          <NavItem href="/franchise/supply-orders" label="Franchise Supply Orders" />
 
           <SectionLabel>Sales &amp; Finance</SectionLabel>
           <NavItem href="/invoices/new" label="New Invoice (POS)" />
           <NavItem href="/invoices"     label="Invoices" />
           <NavItem href="/payments"     label="Payments" />
           <NavItem href="/retailers"    label="Retailers" />
+          <NavItem href="/warehouse/outbound/b2b" label="B2B Orders" />
           <NavItem href="/sales-reps"   label="Sales Reps" />
 
           <SectionLabel>Field Operations</SectionLabel>

@@ -4,3 +4,4 @@ export * from './organization';
 export * from './catalog';
 export * from './inventory';
 export * from './sales';
+export * from './procurement';

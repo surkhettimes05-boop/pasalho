@@ -14,6 +14,7 @@ export interface Product {
   isBatchTracked: boolean;
   isExpiryTracked: boolean;
   isActive?: boolean;
+  productUnits?: Array<{ id: string; unitId: string; conversionToBase: number | string; unit: Unit }>;
   costPrice?: number | string;
   mrp?: number | string;
   status?: 'ACTIVE' | 'INACTIVE'; // derived display field

@@ -153,7 +153,7 @@ export const inventoryApi = {
   },
 };
 
-export type StockTransferStatus = 'DRAFT' | 'SHIPPED' | 'RECEIVED' | 'CANCELLED';
+export type StockTransferStatus = 'DRAFT' | 'CONFIRMED' | 'IN_TRANSIT' | 'SHIPPED' | 'RECEIVED' | 'CANCELLED';
 
 export interface StockTransfer {
   id: string;
@@ -220,10 +220,12 @@ export const transferApi = {
   },
 
   async ship(id: string): Promise<StockTransfer> {
-    return api.post(`/inventory/transfers/${id}/ship`, {});
+    return api.post(`/inventory/transfers/${id}/dispatch`, {}, {
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+    });
   },
 
-  async receive(id: string): Promise<StockTransfer> {
-    return api.post(`/inventory/transfers/${id}/receive`, {});
+  async confirm(id: string): Promise<StockTransfer> {
+    return api.post(`/inventory/transfers/${id}/confirm`, {});
   },
 };

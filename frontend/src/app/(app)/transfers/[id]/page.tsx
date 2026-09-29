@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useOptimistic, useTransition } from 'react';
+import { use } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -27,8 +27,8 @@ export default function TransferDetailPage({ params }: { params: Promise<{ id: s
     },
   });
 
-  const receiveMutation = useMutation({
-    mutationFn: () => transferApi.receive(id),
+  const confirmMutation = useMutation({
+    mutationFn: () => transferApi.confirm(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['transfer', id] });
       queryClient.invalidateQueries({ queryKey: ['transfers'] });
@@ -129,28 +129,36 @@ export default function TransferDetailPage({ params }: { params: Promise<{ id: s
       {transfer.status === 'DRAFT' && (
         <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
           <p className="mb-3 text-sm text-blue-800">
-            Review the transfer items above, then ship to deduct from origin stock.
+            Review the transfer items above, then confirm it for dispatch.
+          </p>
+          <Button
+            onClick={() => confirmMutation.mutate()}
+            disabled={confirmMutation.isPending}
+          >
+            {confirmMutation.isPending ? 'Confirming...' : 'Confirm Transfer'}
+          </Button>
+        </div>
+      )}
+
+      {transfer.status === 'CONFIRMED' && (
+        <div className="rounded-lg border border-green-200 bg-green-50 p-4">
+          <p className="mb-3 text-sm text-green-800">
+            Dispatch deducts warehouse available stock and registers the inbound transfer with the store system.
           </p>
           <Button
             onClick={() => shipMutation.mutate()}
             disabled={shipMutation.isPending}
           >
-            {shipMutation.isPending ? 'Shipping...' : 'Ship Transfer'}
+            {shipMutation.isPending ? 'Dispatching...' : 'Dispatch Transfer'}
           </Button>
         </div>
       )}
 
-      {transfer.status === 'SHIPPED' && (
-        <div className="rounded-lg border border-green-200 bg-green-50 p-4">
-          <p className="mb-3 text-sm text-green-800">
-            Transfer is in transit. Receive at destination to add to stock.
+      {(transfer.status === 'IN_TRANSIT' || transfer.status === 'SHIPPED') && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm text-amber-800">
+            In transit. Store inventory will change only after an authorized employee confirms physical receipt in CEO Dashboard.
           </p>
-          <Button
-            onClick={() => receiveMutation.mutate()}
-            disabled={receiveMutation.isPending}
-          >
-            {receiveMutation.isPending ? 'Receiving...' : 'Receive Transfer'}
-          </Button>
         </div>
       )}
 
