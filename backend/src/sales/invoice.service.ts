@@ -3,6 +3,7 @@ import { PrismaService } from '../database/prisma.service';
 import { AuditLogService } from '../audit/audit-log.service';
 import { InventoryLedgerService } from '../inventory/services/inventory-ledger.service';
 import { RetailerLedgerService } from '../finance/retailer-ledger/retailer-ledger.service';
+import { StockReservationService } from '../inventory/services/stock-reservation.service';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { VoidInvoiceDto } from './dto/void-invoice.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
@@ -16,6 +17,7 @@ export class InvoiceService {
     private readonly audit: AuditLogService,
     private readonly inventoryLedger: InventoryLedgerService,
     private readonly retailerLedger: RetailerLedgerService,
+    private readonly stockReservation: StockReservationService,
   ) {}
 
   async list(pagination: PaginationDto, branchId?: string) {
@@ -72,6 +74,28 @@ export class InvoiceService {
     const grandTotal = subtotal - discountTotal + taxTotal;
 
     const invoice = await this.prisma.$transaction(async (tx) => {
+      const [branch, warehouse, sourceLocation] = await Promise.all([
+        tx.branch.findUnique({ where: { id: dto.branchId }, select: { id: true } }),
+        tx.warehouse.findUnique({ where: { id: dto.warehouseId }, select: { branchId: true } }),
+        tx.inventoryLocation.findUnique({
+          where: { id: dto.sourceLocationId },
+          select: { branchId: true },
+        }),
+      ]);
+      if (
+        !branch ||
+        !warehouse ||
+        warehouse.branchId !== dto.branchId ||
+        !sourceLocation ||
+        sourceLocation.branchId !== dto.branchId
+      ) {
+        throw new AppError(
+          ErrorCodes.VALIDATION_ERROR,
+          'Invoice branch, warehouse, and source location must belong to the same branch.',
+          422,
+        );
+      }
+
       const inv = await tx.invoice.create({
         data: {
           branchId: dto.branchId,
@@ -122,56 +146,68 @@ export class InvoiceService {
   }
 
   async post(id: string, actorUserId: string) {
-    const invoice = await this.findById(id);
+    const result = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Invoice" WHERE id = ${id} FOR UPDATE`;
+      const invoice = await tx.invoice.findUnique({
+        where: { id },
+        include: { items: true, salesOrder: true },
+      });
+      if (!invoice) throw new AppError(ErrorCodes.NOT_FOUND, 'Invoice not found.', 404);
 
-    if (invoice.status !== 'DRAFT') {
-      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Only DRAFT invoices can be posted.', 422);
-    }
+      if (invoice.status !== 'DRAFT') return { invoice, alreadyPosted: true };
 
-    // Validate batches before any writes
-    for (const item of invoice.items) {
-      if (item.batchId) {
-        const batch = await this.prisma.batch.findUnique({ where: { id: item.batchId } });
-        if (!batch) throw new AppError(ErrorCodes.NOT_FOUND, `Batch ${item.batchId} not found.`, 404);
-        if (batch.status === 'EXPIRED') throw new AppError(ErrorCodes.EXPIRED_BATCH, 'Batch is expired and cannot be sold.', 422);
-        if (batch.status === 'BLOCKED') throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Batch is blocked and cannot be sold.', 422);
+      for (const item of invoice.items) {
+        if (item.batchId) {
+          const batch = await tx.batch.findUnique({ where: { id: item.batchId } });
+          if (!batch) throw new AppError(ErrorCodes.NOT_FOUND, `Batch ${item.batchId} not found.`, 404);
+          if (batch.status === 'EXPIRED') throw new AppError(ErrorCodes.EXPIRED_BATCH, 'Batch is expired and cannot be sold.', 422);
+          if (batch.status === 'BLOCKED') throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Batch is blocked and cannot be sold.', 422);
+        }
       }
-    }
 
-    // Post inventory deductions — one event, one movement per line item
-    await this.inventoryLedger.postEvent({
-      eventType: 'SALE_DEDUCTED',
-      branchId: invoice.branchId,
-      referenceType: 'INVOICE',
-      referenceId: invoice.id,
-      createdById: actorUserId,
-      idempotencyKey: `invoice-post-${invoice.id}`,
-      movements: invoice.items.map((item) => ({
-        locationId: invoice.sourceLocationId,
-        productId: item.productId,
-        batchId: item.batchId ?? undefined,
-        unitId: item.unitId,
-        stockState: 'AVAILABLE' as const,
-        quantityDelta: -Number(item.quantity),
-        baseQuantityDelta: -Number(item.baseQuantity),
-        movementType: 'SALE_DEDUCTION' as const,
-        reasonCode: 'INVOICE_SALE',
-      })),
-    });
+      if (invoice.salesOrder) {
+        await this.stockReservation.consumeForOrder(tx, {
+          salesOrderId: invoice.salesOrder.id,
+          invoiceId: invoice.id,
+          branchId: invoice.branchId,
+          createdById: actorUserId,
+        });
+      } else {
+        await this.inventoryLedger.postEvent(
+          {
+            eventType: 'SALE_DEDUCTED',
+            branchId: invoice.branchId,
+            referenceType: 'INVOICE',
+            referenceId: invoice.id,
+            createdById: actorUserId,
+            idempotencyKey: `invoice-post-${invoice.id}`,
+            movements: invoice.items.map((item) => ({
+              locationId: invoice.sourceLocationId,
+              productId: item.productId,
+              batchId: item.batchId ?? undefined,
+              unitId: item.unitId,
+              stockState: 'AVAILABLE' as const,
+              quantityDelta: -Number(item.quantity),
+              baseQuantityDelta: -Number(item.baseQuantity),
+              movementType: 'SALE_DEDUCTION' as const,
+              reasonCode: 'INVOICE_SALE',
+            })),
+          },
+          tx,
+        );
+      }
 
-    await this.prisma.$transaction(async (tx) => {
-      // Mark invoice posted
-      await tx.invoice.update({
+      const status = invoice.retailerId ? 'CREDIT_OPEN' : 'POSTED';
+      const posted = await tx.invoice.update({
         where: { id },
         data: {
-          status: invoice.retailerId ? 'CREDIT_OPEN' : 'POSTED',
+          status,
           paymentStatus: 'UNPAID',
           postedById: actorUserId,
           postedAt: new Date(),
         },
       });
 
-      // Create retailer debit if credit sale
       if (invoice.retailerId) {
         await this.retailerLedger.createInvoiceDebit(tx, {
           branchId: invoice.branchId,
@@ -180,45 +216,43 @@ export class InvoiceService {
           amount: Number(invoice.grandTotal),
           createdById: actorUserId,
         });
-
-        // Also create financial ledger entries
-        await tx.financialLedgerEntry.create({
-          data: {
-            branchId: invoice.branchId,
-            entryType: 'RECEIVABLE_DEBIT',
-            referenceType: 'INVOICE',
-            referenceId: invoice.id,
-            debitAmount: Number(invoice.grandTotal),
-            creditAmount: 0,
-            createdById: actorUserId,
-          },
+        await tx.financialLedgerEntry.createMany({
+          data: [
+            {
+              branchId: invoice.branchId,
+              entryType: 'RECEIVABLE_DEBIT',
+              referenceType: 'INVOICE',
+              referenceId: invoice.id,
+              debitAmount: Number(invoice.grandTotal),
+              creditAmount: 0,
+              createdById: actorUserId,
+            },
+            {
+              branchId: invoice.branchId,
+              entryType: 'SALES_CREDIT',
+              referenceType: 'INVOICE',
+              referenceId: invoice.id,
+              debitAmount: 0,
+              creditAmount: Number(invoice.grandTotal),
+              createdById: actorUserId,
+            },
+          ],
         });
-
-        await tx.financialLedgerEntry.create({
-          data: {
-            branchId: invoice.branchId,
-            entryType: 'SALES_CREDIT',
-            referenceType: 'INVOICE',
-            referenceId: invoice.id,
-            debitAmount: 0,
-            creditAmount: Number(invoice.grandTotal),
-            createdById: actorUserId,
-          },
-        });
-      } else {
-        // Cash sale
-        await tx.invoice.update({ where: { id }, data: { status: 'POSTED' } });
       }
+
+      return { invoice: posted, alreadyPosted: false };
     });
 
-    await this.audit.record({
-      actorUserId,
-      action: 'INVOICE_POSTED',
-      entityType: 'INVOICE',
-      entityId: id,
-      branchId: invoice.branchId,
-      afterData: { invoiceNumber: invoice.invoiceNumber, grandTotal: Number(invoice.grandTotal) },
-    });
+    if (!result.alreadyPosted) {
+      await this.audit.record({
+        actorUserId,
+        action: 'INVOICE_POSTED',
+        entityType: 'INVOICE',
+        entityId: id,
+        branchId: result.invoice.branchId,
+        afterData: { invoiceNumber: result.invoice.invoiceNumber, grandTotal: Number(result.invoice.grandTotal) },
+      });
+    }
 
     return this.findById(id);
   }

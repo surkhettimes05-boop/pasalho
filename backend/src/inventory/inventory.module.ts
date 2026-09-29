@@ -15,6 +15,7 @@ import { InventoryReconciliationController } from './inventory-reconciliation.co
 import { TransferController } from './transfer.controller';
 import { DamageReportController } from './damage-report.controller';
 import { ExpiryController } from './expiry.controller';
+import { StoreReceiptController } from './store-receipt.controller';
 
 @Module({
   imports: [DatabaseModule, AuditModule, AuthModule],
@@ -34,6 +35,7 @@ import { ExpiryController } from './expiry.controller';
     TransferController,
     DamageReportController,
     ExpiryController,
+    StoreReceiptController,
   ],
   exports: [
     InventoryLedgerService,

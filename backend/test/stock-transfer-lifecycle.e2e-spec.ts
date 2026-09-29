@@ -69,6 +69,24 @@ describe("Warehouse to store transfer lifecycle (real PostgreSQL)", () => {
     return transfers.confirm(transfer.id, userId);
   };
 
+  const acknowledge = async (transferId: string, key: string) => {
+    const transfer = await prisma.stockTransfer.findUniqueOrThrow({
+      where: { id: transferId },
+      include: { items: true },
+    });
+    return transfers.acknowledgeStoreReceipt(
+      transferId,
+      {
+        destinationBranchCode: `${prefix}-to`,
+        items: transfer.items.map((item) => ({
+          productId: item.productId,
+          quantity: Number(item.quantity),
+        })),
+      },
+      key,
+    );
+  };
+
   beforeAll(async () => {
     prisma = new PrismaService();
     await prisma.$connect();
@@ -278,21 +296,21 @@ describe("Warehouse to store transfer lifecycle (real PostgreSQL)", () => {
     ).toBe("CONFIRMED");
   });
 
-  it("receives once, increases store inventory, and never deducts warehouse again", async () => {
+  it("acknowledges once, clears in-transit custody, and never creates PASALO store stock", async () => {
     const transfer = await createConfirmedTransfer(`${prefix}-receive`);
     await transfers.dispatch(transfer.id, userId, `${prefix}-receive-dispatch`);
-    await transfers.receive(transfer.id, userId, `${prefix}-receive-key`);
-    await transfers.receive(transfer.id, userId, `${prefix}-receive-retry`);
+    await acknowledge(transfer.id, `${prefix}-receive-key`);
+    await acknowledge(transfer.id, `${prefix}-receive-retry`);
     const source = await balances(sourceLocationId);
     const store = await balances(storeLocationId);
     expect(source.get("AVAILABLE")).toBe(5);
     expect(source.get("IN_TRANSIT") ?? 0).toBe(0);
-    expect(store.get("AVAILABLE")).toBe(5);
+    expect(store.get("AVAILABLE") ?? 0).toBe(0);
     expect(
       await prisma.inventoryMovement.count({
         where: { referenceId: transfer.id },
       }),
-    ).toBe(4);
+    ).toBe(3);
     expect(
       (
         await prisma.stockTransfer.findUniqueOrThrow({
@@ -302,7 +320,7 @@ describe("Warehouse to store transfer lifecycle (real PostgreSQL)", () => {
     ).toBe("RECEIVED");
   });
 
-  it("proves warehouse to store to POS flow with concurrent replays", async () => {
+  it("keeps warehouse dispatch and store-receipt acknowledgement replay-safe", async () => {
     await ledger.postEvent({
       eventType: "OPENING_STOCK",
       branchId: branchA,
@@ -338,11 +356,11 @@ describe("Warehouse to store transfer lifecycle (real PostgreSQL)", () => {
     ).toBe("IN_TRANSIT");
 
     await Promise.all([
-      transfers.receive(transfer.id, userId, `${prefix}-flow-receive`),
-      transfers.receive(transfer.id, userId, `${prefix}-flow-receive`),
+      acknowledge(transfer.id, `${prefix}-flow-receive`),
+      acknowledge(transfer.id, `${prefix}-flow-receive`),
     ]);
     expect((await balances(sourceLocationId)).get("AVAILABLE")).toBe(90);
-    expect((await balances(storeLocationId)).get("AVAILABLE")).toBe(10);
+    expect((await balances(storeLocationId)).get("AVAILABLE") ?? 0).toBe(0);
     expect(
       (
         await prisma.stockTransfer.findUniqueOrThrow({
@@ -351,68 +369,18 @@ describe("Warehouse to store transfer lifecycle (real PostgreSQL)", () => {
       ).status,
     ).toBe("RECEIVED");
 
-    const invoice = await invoices.create(
-      {
-        branchId: branchB,
-        warehouseId: warehouseB,
-        sourceLocationId: storeLocationId,
-        items: [
-          {
-            productId,
-            unitId,
-            quantity: 3,
-            baseQuantity: 3,
-            unitPrice: 10,
-          },
-        ],
-      },
-      userId,
-    );
-    await Promise.all([
-      invoices.post(invoice.id, userId),
-      invoices.post(invoice.id, userId),
-    ]);
-
     expect((await balances(sourceLocationId)).get("AVAILABLE")).toBe(90);
-    expect((await balances(storeLocationId)).get("AVAILABLE")).toBe(7);
+    expect((await balances(storeLocationId)).get("AVAILABLE") ?? 0).toBe(0);
     expect(
       await prisma.inventoryMovement.count({
         where: { referenceId: transfer.id },
       }),
-    ).toBe(4);
-    expect(
-      await prisma.inventoryMovement.count({
-        where: { referenceId: invoice.id },
-      }),
-    ).toBe(1);
-    expect(
-      await prisma.inventoryMovement.count({
-        where: { referenceId: invoice.id, movementType: "SALE_DEDUCTION" },
-      }),
-    ).toBe(1);
+    ).toBe(3);
     expect(
       await prisma.inventoryEvent.count({
         where: { referenceId: transfer.id, eventType: "STOCK_TRANSFER" },
       }),
-    ).toBe(4);
-    expect(
-      (await prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } }))
-        .status,
-    ).toBe("POSTED");
-
-    await expect(
-      invoices.create(
-        {
-          branchId: branchB,
-          warehouseId: warehouseA,
-          sourceLocationId: storeLocationId,
-          items: [
-            { productId, unitId, quantity: 1, baseQuantity: 1, unitPrice: 10 },
-          ],
-        },
-        userId,
-      ),
-    ).rejects.toMatchObject({ statusCode: 422 });
+    ).toBe(3);
   });
 
   it("rolls back dispatch state and inventory when the ledger fails", async () => {
@@ -489,13 +457,12 @@ describe("Warehouse to store transfer lifecycle (real PostgreSQL)", () => {
       "https://ceo-dashboard.test/api/sync/inbound-transfers";
     process.env.STORE_SYNC_WEBHOOK_SECRET = "integration-secret";
     const transfer = await createConfirmedTransfer(`${prefix}-sync`);
-    await transfers.dispatch(transfer.id, userId, `${prefix}-sync-dispatch`);
     const fetchMock = jest
       .spyOn(global, "fetch")
       .mockRejectedValueOnce(new Error("dashboard unavailable"))
       .mockResolvedValueOnce({ ok: true, status: 200 } as Response);
     await expect(
-      transfers.receive(transfer.id, userId, `${prefix}-sync-receive`),
+      transfers.dispatch(transfer.id, userId, `${prefix}-sync-dispatch`),
     ).rejects.toMatchObject({ statusCode: 502 });
     const pending = await prisma.inventoryEvent.findUniqueOrThrow({
       where: { idempotencyKey: `store-sync-${transfer.id}` },
@@ -503,7 +470,7 @@ describe("Warehouse to store transfer lifecycle (real PostgreSQL)", () => {
     expect((pending.metadata as any).status).toBe("PENDING");
     expect((pending.metadata as any).payload.eventId).toBe(pending.id);
     expect((pending.metadata as any).payloadHash).toMatch(/^[a-f0-9]{64}$/);
-    expect((await balances(storeLocationId)).get("AVAILABLE")).toBe(5);
+    expect((await balances(storeLocationId)).get("AVAILABLE") ?? 0).toBe(0);
     expect(fetchMock.mock.calls[0][1]).toMatchObject({
       headers: expect.objectContaining({
         "x-pasalo-webhook-secret": "integration-secret",
@@ -526,7 +493,7 @@ describe("Warehouse to store transfer lifecycle (real PostgreSQL)", () => {
       where: { id: pending.id },
     });
     expect(sent.eventStatus).toBe("POSTED");
-    expect((await balances(storeLocationId)).get("AVAILABLE")).toBe(5);
+    expect((await balances(storeLocationId)).get("AVAILABLE") ?? 0).toBe(0);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1][1]?.body).toBe(fetchMock.mock.calls[0][1]?.body);
     await expect(transfers.retryStoreSync(transfer.id, userId)).rejects.toMatchObject({
@@ -536,7 +503,7 @@ describe("Warehouse to store transfer lifecycle (real PostgreSQL)", () => {
     fetchMock.mockRestore();
   });
 
-  it("moves exactly 10 of 100 warehouse units through dispatch and receive", async () => {
+  it("moves exactly 10 of 100 warehouse units through dispatch and acknowledgement", async () => {
     await ledger.postEvent({
       eventType: "OPENING_STOCK",
       branchId: branchA,
@@ -562,43 +529,30 @@ describe("Warehouse to store transfer lifecycle (real PostgreSQL)", () => {
     await transfers.dispatch(transfer.id, userId, `${prefix}-hundred-dispatch`);
     expect((await balances(sourceLocationId)).get("AVAILABLE")).toBe(90);
     expect((await balances(sourceLocationId)).get("IN_TRANSIT")).toBe(10);
-    await transfers.receive(transfer.id, userId, `${prefix}-hundred-receive`);
-    expect((await balances(storeLocationId)).get("AVAILABLE")).toBe(10);
+    await acknowledge(transfer.id, `${prefix}-hundred-receive`);
+    expect((await balances(storeLocationId)).get("AVAILABLE") ?? 0).toBe(0);
     expect((await balances(sourceLocationId)).get("AVAILABLE")).toBe(90);
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).items).toEqual([{ productId, quantity: 10 }]);
-    await transfers.receive(transfer.id, userId, `${prefix}-hundred-receive-replay`);
-    expect((await balances(storeLocationId)).get("AVAILABLE")).toBe(10);
+    await acknowledge(transfer.id, `${prefix}-hundred-receive-replay`);
+    expect((await balances(storeLocationId)).get("AVAILABLE") ?? 0).toBe(0);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     fetchMock.mockRestore();
   });
 
-  it("sends the actual received quantity rather than the dispatched quantity", async () => {
+  it("rejects a store acknowledgement whose count differs from dispatch", async () => {
     const transfer = await createConfirmedTransfer(`${prefix}-variance`, 5);
     await transfers.dispatch(
       transfer.id,
       userId,
       `${prefix}-variance-dispatch`,
     );
-    await prisma.stockTransferItem.updateMany({
-      where: { stockTransferId: transfer.id },
-      data: { receivedQuantity: 3, receivedBaseQuantity: 3 },
-    });
-    await transfers.receive(transfer.id, userId, `${prefix}-variance-receive`);
-    process.env.STORE_SYNC_WEBHOOK_URL =
-      "https://ceo-dashboard.test/api/sync/inbound-transfers";
-    process.env.STORE_SYNC_WEBHOOK_SECRET = "integration-secret";
-    const fetchMock = jest
-      .spyOn(global, "fetch")
-      .mockResolvedValueOnce({ ok: true, status: 201 } as Response);
-    await transfers.retryStoreSync(transfer.id, userId);
-    const payload = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
-    expect(payload.items).toEqual([{ productId, quantity: 3 }]);
-    expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
-      "x-payload-sha256": createHash("sha256")
-        .update(String(fetchMock.mock.calls[0][1]?.body))
-        .digest("hex"),
-    });
-    expect((await balances(storeLocationId)).get("AVAILABLE")).toBe(3);
-    fetchMock.mockRestore();
+    await expect(transfers.acknowledgeStoreReceipt(
+      transfer.id,
+      { destinationBranchCode: `${prefix}-to`, items: [{ productId, quantity: 3 }] },
+      `${prefix}-variance-receive`,
+    )).rejects.toMatchObject({ statusCode: 409 });
+    expect((await balances(sourceLocationId)).get("IN_TRANSIT")).toBe(5);
+    expect((await balances(storeLocationId)).get("AVAILABLE") ?? 0).toBe(0);
+    expect((await prisma.stockTransfer.findUniqueOrThrow({ where: { id: transfer.id } })).status).toBe("IN_TRANSIT");
   });
 });

@@ -154,6 +154,16 @@ export class ScopeGuard implements CanActivate {
         add(branchIds, resource?.branchId);
         await addWarehouse(resource?.warehouseId);
       }
+      if (scope === 'purchase-order' && id) {
+        const resource = await this.prisma.purchaseOrder.findUnique({ where: { id }, select: { branchId: true, warehouseId: true } });
+        add(branchIds, resource?.branchId);
+        await addWarehouse(resource?.warehouseId);
+      }
+      if (scope === 'goods-receipt' && id) {
+        const resource = await this.prisma.goodsReceipt.findUnique({ where: { id }, select: { branchId: true, warehouseId: true } });
+        add(branchIds, resource?.branchId);
+        await addWarehouse(resource?.warehouseId);
+      }
       if (scope === 'invoice' && body.sourceLocationId) {
         const sourceLocation = await this.prisma.inventoryLocation.findUnique({
           where: { id: body.sourceLocationId },

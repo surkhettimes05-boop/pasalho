@@ -5,19 +5,22 @@ import { CreateSalesRepDto } from './dto/create-sales-rep.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/permissions.guard';
+import { ScopeGuard } from '../auth/scope.guard';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
+import { RequireScope } from '../auth/decorators/require-scope.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '@prisma/client';
 
 @ApiTags('sales-reps')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, ScopeGuard)
 @Controller('sales-reps')
 export class SalesRepController {
   constructor(private readonly salesRepService: SalesRepService) {}
 
   @Get()
   @RequirePermissions('sales_reps.view')
+  @RequireScope('branch')
   @ApiOperation({ summary: 'List sales reps' })
   @ApiQuery({ name: 'branchId', required: false })
   list(@Query() pagination: PaginationDto, @Query('branchId') branchId?: string) {
@@ -26,6 +29,7 @@ export class SalesRepController {
 
   @Get(':id')
   @RequirePermissions('sales_reps.view')
+  @RequireScope('sales-rep')
   @ApiOperation({ summary: 'Get sales rep' })
   findOne(@Param('id') id: string) {
     return this.salesRepService.findById(id);
@@ -33,6 +37,7 @@ export class SalesRepController {
 
   @Post()
   @RequirePermissions('sales_reps.create')
+  @RequireScope('branch')
   @ApiOperation({ summary: 'Create sales rep' })
   create(@Body() dto: CreateSalesRepDto, @CurrentUser() actor: User) {
     return this.salesRepService.create(dto, actor.id);
@@ -40,6 +45,7 @@ export class SalesRepController {
 
   @Patch(':id')
   @RequirePermissions('sales_reps.view')
+  @RequireScope('sales-rep')
   @ApiOperation({ summary: 'Update sales rep status' })
   update(@Param('id') id: string, @Body() dto: { status?: any }, @CurrentUser() actor: User) {
     return this.salesRepService.update(id, dto, actor.id);

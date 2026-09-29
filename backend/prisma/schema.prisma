@@ -53,6 +53,7 @@ enum InventoryEventType {
   SALE_DEDUCTED
   REVERSAL_EVENT
   STOCK_TRANSFER
+  PROCUREMENT_RECEIPT
 }
 
 enum InventoryEventStatus {
@@ -69,9 +70,13 @@ enum InventoryMovementType {
   REVERSAL
   TRANSFER_OUT
   TRANSFER_IN
+  PROCUREMENT_RECEIPT
 }
 
 enum ReferenceType {
+  SUPPLIER
+  PURCHASE_ORDER
+  GOODS_RECEIPT
   STOCK_ADJUSTMENT
   STOCK_TRANSFER
   INVOICE
@@ -201,6 +206,7 @@ enum OrderSource {
   STOREFRONT
   DNP
   SALES_REP
+  FRANCHISE
 }
 
 enum StockReservationStatus {
@@ -214,6 +220,14 @@ enum IdempotencyStatus {
   PROCESSING
   COMPLETED
   FAILED
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  CONFIRMED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
 }
 
 enum DeliveryStatus {
@@ -310,6 +324,13 @@ enum AuditAction {
   CASH_SESSION_CLOSED
   PAYMENT_ALLOCATED
   LEDGER_ENTRY_CREATED
+  SUPPLIER_CREATED
+  SUPPLIER_UPDATED
+  SUPPLIER_DEACTIVATED
+  PURCHASE_ORDER_CREATED
+  PURCHASE_ORDER_CONFIRMED
+  PURCHASE_ORDER_CANCELLED
+  GOODS_RECEIPT_POSTED
 }
 
 model User {
@@ -366,6 +387,8 @@ model User {
   closedCashSessions       CashSession[]        @relation("CashSessionCloser")
   requestedCreditApprovals CreditApproval[]     @relation("CreditApprovalRequester")
   approvedCreditApprovals  CreditApproval[]     @relation("CreditApprovalApprover")
+  createdPurchaseOrders    PurchaseOrder[]      @relation("PurchaseOrderCreator")
+  receivedGoodsReceipts    GoodsReceipt[]       @relation("GoodsReceiptReceiver")
 
   @@index([status])
   @@index([defaultBranchId])
@@ -508,6 +531,8 @@ model Branch {
   stockReservations         StockReservation[]
   cashSessions              CashSession[]
   creditApprovals           CreditApproval[]
+  purchaseOrders            PurchaseOrder[]
+  goodsReceipts             GoodsReceipt[]
 
   @@index([status])
 }
@@ -531,6 +556,8 @@ model Warehouse {
   invoices                  Invoice[]
   StockCount                StockCount[]
   damageReports             DamageReport[]
+  purchaseOrders            PurchaseOrder[]
+  goodsReceipts             GoodsReceipt[]
 
   @@unique([branchId, code])
   @@index([branchId])
@@ -607,6 +634,7 @@ model Unit {
   invoiceItems          InvoiceItem[]
   StockCountItem        StockCountItem[]
   salesOrderItems       SalesOrderItem[]
+  franchiseSupplyItems  FranchiseSupplyOrderItem[]
   damageReportItems     DamageReportItem[]
   stockReservationItems StockReservationItem[]
 }
@@ -627,6 +655,7 @@ model Product {
   sellingPrice       Decimal?  @db.Decimal(18, 4)
   stock              Int       @default(0)
   imageUrl           String?
+  packSize           String?
   storefrontCategory String?
   isActive           Boolean   @default(true)
   createdAt          DateTime  @default(now())
@@ -648,6 +677,9 @@ model Product {
   damageReportItems     DamageReportItem[]
   expiryEvents          ExpiryEvent[]
   stockReservationItems StockReservationItem[]
+  franchiseSupplyItems  FranchiseSupplyOrderItem[]
+  purchaseOrderItems    PurchaseOrderItem[]
+  goodsReceiptItems     GoodsReceiptItem[]
 
   @@index([categoryId])
   @@index([brandId])
@@ -665,8 +697,10 @@ model ProductUnit {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
-  unit    Unit    @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  product            Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  purchaseOrderItems PurchaseOrderItem[]
+  goodsReceiptItems  GoodsReceiptItem[]
+  unit               Unit                @relation(fields: [unitId], references: [id], onDelete: Restrict)
 
   @@unique([productId, unitId])
   @@index([productId])
@@ -697,11 +731,127 @@ model Batch {
   damageReportItems     DamageReportItem[]
   expiryEvents          ExpiryEvent[]
   stockReservationItems StockReservationItem[]
+  goodsReceiptItems     GoodsReceiptItem[]
 
   @@unique([productId, batchNumber])
   @@index([productId])
   @@index([expiryDate])
   @@index([status])
+}
+
+model Supplier {
+  id            String           @id @default(uuid())
+  supplierCode  String           @unique
+  name          String
+  contactPerson String?
+  phone         String?
+  email         String?
+  address       String?
+  taxIdentifier String?
+  status        MasterDataStatus @default(ACTIVE)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  purchaseOrders PurchaseOrder[]
+  goodsReceipts  GoodsReceipt[]
+}
+
+model PurchaseOrder {
+  id                  String              @id @default(uuid())
+  purchaseOrderNumber String              @unique
+  supplierId          String
+  warehouseId         String
+  branchId            String
+  status              PurchaseOrderStatus @default(DRAFT)
+  expectedDate        DateTime?
+  notes               String?
+  subtotal            Decimal             @default(0) @db.Decimal(18, 4)
+  createdById         String
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  supplier      Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  warehouse     Warehouse           @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  branch        Branch              @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  createdBy     User                @relation("PurchaseOrderCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  items         PurchaseOrderItem[]
+  goodsReceipts GoodsReceipt[]
+
+  @@index([supplierId])
+  @@index([warehouseId])
+  @@index([branchId])
+  @@index([status])
+}
+
+model PurchaseOrderItem {
+  id               String   @id @default(uuid())
+  purchaseOrderId  String
+  productId        String
+  productUnitId    String
+  orderedQuantity  Decimal  @db.Decimal(18, 6)
+  receivedQuantity Decimal  @default(0) @db.Decimal(18, 6)
+  unitCost         Decimal  @db.Decimal(18, 4)
+  lineTotal        Decimal  @db.Decimal(18, 4)
+  createdAt        DateTime @default(now())
+
+  purchaseOrder     PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product           Product            @relation(fields: [productId], references: [id], onDelete: Restrict)
+  productUnit       ProductUnit        @relation(fields: [productUnitId], references: [id], onDelete: Restrict)
+  goodsReceiptItems GoodsReceiptItem[]
+
+  @@index([purchaseOrderId])
+  @@index([productId])
+}
+
+model GoodsReceipt {
+  id              String   @id @default(uuid())
+  receiptNumber   String   @unique
+  purchaseOrderId String
+  supplierId      String
+  warehouseId     String
+  branchId        String
+  receivedById    String
+  idempotencyKey  String   @unique
+  requestHash     String
+  receivedAt      DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  purchaseOrder PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  supplier      Supplier           @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  warehouse     Warehouse          @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  branch        Branch             @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  receivedBy    User               @relation("GoodsReceiptReceiver", fields: [receivedById], references: [id], onDelete: Restrict)
+  items         GoodsReceiptItem[]
+
+  @@index([purchaseOrderId])
+  @@index([supplierId])
+  @@index([warehouseId])
+  @@index([branchId])
+}
+
+model GoodsReceiptItem {
+  id                  String    @id @default(uuid())
+  goodsReceiptId      String
+  purchaseOrderItemId String
+  productId           String
+  productUnitId       String
+  batchId             String?
+  receivedQuantity    Decimal   @db.Decimal(18, 6)
+  acceptedQuantity    Decimal   @db.Decimal(18, 6)
+  rejectedQuantity    Decimal   @default(0) @db.Decimal(18, 6)
+  unitCost            Decimal   @db.Decimal(18, 4)
+  expiryDate          DateTime?
+  createdAt           DateTime  @default(now())
+
+  goodsReceipt      GoodsReceipt      @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  purchaseOrderItem PurchaseOrderItem @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Restrict)
+  product           Product           @relation(fields: [productId], references: [id], onDelete: Restrict)
+  productUnit       ProductUnit       @relation(fields: [productUnitId], references: [id], onDelete: Restrict)
+  batch             Batch?            @relation(fields: [batchId], references: [id], onDelete: Restrict)
+
+  @@index([goodsReceiptId])
+  @@index([purchaseOrderItemId])
+  @@index([productId])
 }
 
 model InventoryEvent {
@@ -896,26 +1046,26 @@ model StockCountItem {
 }
 
 model StockTransfer {
-  id              String              @id @default(uuid())
-  transferNo      String              @unique
-  fromBranchId    String
-  fromWarehouseId String
-  fromLocationId  String
-  toBranchId      String
-  toWarehouseId   String
-  toLocationId    String
-  status          StockTransferStatus @default(DRAFT)
-  notes           String?
-  createdById     String
-  dispatchedById  String?
-  shippedById     String?
-  receivedById    String?
-  externalReference String? @unique
-  dispatchedAt    DateTime?
-  shippedAt       DateTime?
-  receivedAt      DateTime?
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  id                String              @id @default(uuid())
+  transferNo        String              @unique
+  fromBranchId      String
+  fromWarehouseId   String
+  fromLocationId    String
+  toBranchId        String
+  toWarehouseId     String
+  toLocationId      String
+  status            StockTransferStatus @default(DRAFT)
+  notes             String?
+  createdById       String
+  dispatchedById    String?
+  shippedById       String?
+  receivedById      String?
+  externalReference String?             @unique
+  dispatchedAt      DateTime?
+  shippedAt         DateTime?
+  receivedAt        DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
 
   fromBranch    Branch              @relation("StockTransferOriginBranch", fields: [fromBranchId], references: [id], onDelete: Restrict)
   fromWarehouse Warehouse           @relation("StockTransferOriginWarehouse", fields: [fromWarehouseId], references: [id], onDelete: Restrict)
@@ -1284,6 +1434,7 @@ model SalesOrder {
   createdBy    User               @relation("SalesOrderCreator", fields: [createdById], references: [id], onDelete: Restrict)
   items        SalesOrderItem[]
   reservations StockReservation[]
+  franchiseSupplyOrder FranchiseSupplyOrder?
 
   @@index([branchId])
   @@index([salesRepId])
@@ -1291,6 +1442,91 @@ model SalesOrder {
   @@index([retailerId])
   @@index([status])
   @@index([createdAt])
+}
+
+enum FranchiseSupplyStatus {
+  REQUESTED
+  APPROVED
+  PICKING
+  PACKED
+  DISPATCHED
+  RECEIVED
+  CANCELLED
+}
+
+model FranchisePartner {
+  id        String           @id @default(uuid())
+  name      String
+  phone     String
+  email     String?
+  status    MasterDataStatus @default(ACTIVE)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  stores    FranchiseStore[]
+
+  @@index([status])
+}
+
+model FranchiseStore {
+  id        String           @id @default(uuid())
+  partnerId String
+  name      String
+  address   String
+  status    MasterDataStatus @default(ACTIVE)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  partner   FranchisePartner @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  orders    FranchiseSupplyOrder[]
+
+  @@index([partnerId, status])
+}
+
+model FranchiseSupplyOrder {
+  id            String                @id @default(uuid())
+  orderNumber   String                @unique
+  storeId       String
+  salesOrderId  String?               @unique
+  status        FranchiseSupplyStatus @default(REQUESTED)
+  totalAmount   Decimal?              @db.Decimal(18, 4)
+  requestedById String
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  store         FranchiseStore        @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  salesOrder    SalesOrder?           @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+  items         FranchiseSupplyOrderItem[]
+  history       FranchiseSupplyOrderEvent[]
+
+  @@index([storeId, status])
+  @@index([status, createdAt])
+}
+
+model FranchiseSupplyOrderItem {
+  id          String              @id @default(uuid())
+  orderId     String
+  productId   String
+  unitId      String
+  quantity    Decimal             @db.Decimal(18, 6)
+  unitPrice   Decimal?            @db.Decimal(18, 4)
+  lineTotal   Decimal?            @db.Decimal(18, 4)
+  order       FranchiseSupplyOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
+  unit        Unit                @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+model FranchiseSupplyOrderEvent {
+  id        String                @id @default(uuid())
+  orderId   String
+  fromStatus FranchiseSupplyStatus?
+  toStatus   FranchiseSupplyStatus
+  actorId   String
+  notes     String?
+  createdAt DateTime              @default(now())
+  order     FranchiseSupplyOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
 }
 
 model SalesOrderItem {

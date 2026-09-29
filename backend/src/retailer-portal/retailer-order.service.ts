@@ -3,6 +3,7 @@ import { PrismaService } from '../database/prisma.service';
 import { AuditLogService } from '../audit/audit-log.service';
 import { RetailerNotificationService } from './retailer-notification.service';
 import { InvoiceService } from '../sales/invoice.service';
+import { SalesOrderService } from '../sales-orders/sales-order.service';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { AppError } from '../common/errors/app-error';
 import { ErrorCodes } from '../common/errors/error-codes';
@@ -16,105 +17,71 @@ export class RetailerOrderService {
     private readonly audit: AuditLogService,
     private readonly notificationService: RetailerNotificationService,
     private readonly invoiceService: InvoiceService,
+    private readonly salesOrderService: SalesOrderService,
   ) {}
 
-  async placeOrder(retailerId: string, items: CreateOrderItemDto[], notes?: string) {
+  async placeOrder(retailerId: string, items: CreateOrderItemDto[], notes?: string, idempotencyKey?: string) {
     const retailer = await this.prisma.retailer.findUnique({ where: { id: retailerId } });
     if (!retailer) {
       throw new AppError(ErrorCodes.NOT_FOUND, 'Retailer not found.', 404);
     }
 
-    const orderNo = `RET-ORDER-${Date.now()}`;
-
-    const order = await this.prisma.$transaction(async (tx) => {
-      const o = await tx.salesOrder.create({
-        data: {
-          orderNo,
-          branchId: retailer.branchId,
-          retailerId: retailer.id,
-          salesRepId: undefined,
-          createdById: undefined,
-          notes: notes || null,
-          subtotal: 0,
-          grandTotal: 0,
-          status: 'DRAFT',
-        },
-      });
-
-      let subtotal = 0;
-      for (const item of items) {
-        const product = await tx.product.findUnique({ where: { id: item.productId } });
-        if (!product) {
-          throw new AppError(ErrorCodes.NOT_FOUND, `Product ${item.productId} not found.`, 404);
-        }
-
-        const unitPrice = Number(product.mrp || 0);
-
-        await tx.salesOrderItem.create({
-          data: {
-            salesOrderId: o.id,
-            productId: item.productId,
-            batchId: item.batchId || null,
-            unitId: item.unitId,
-            quantity: item.quantity,
-            baseQuantity: item.quantity,
-            unitPrice,
-            lineTotal: item.quantity * unitPrice,
-            notes: null,
-          },
-        });
-
-        subtotal += item.quantity * unitPrice;
-      }
-
-      await tx.salesOrder.update({
-        where: { id: o.id },
-        data: { subtotal, grandTotal: subtotal },
-      });
-
-      await tx.salesOrder.update({
-        where: { id: o.id },
-        data: { status: 'CONFIRMED', confirmedAt: new Date() },
-      });
-
-      return tx.salesOrder.findUnique({
-        where: { id: o.id },
-        include: {
-          items: {
-            include: {
-              product: { select: { id: true, name: true, skuCode: true } },
-              batch: { select: { id: true, batchNumber: true } },
-              unit: { select: { id: true, name: true, symbol: true } },
-            },
-          },
-        },
-      });
+    if (!idempotencyKey) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Idempotency-Key is required.', 422);
+    }
+    const warehouse = await this.prisma.warehouse.findFirst({
+      where: { status: 'ACTIVE' },
+      include: { inventoryLocation: true },
+      orderBy: { createdAt: 'asc' },
     });
+    if (!warehouse?.inventoryLocation || warehouse.inventoryLocation.status !== 'ACTIVE') {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Central Warehouse is not configured with an active inventory location.', 500);
+    }
+    const systemUserId = '99999999-9999-4999-a999-999999999999';
+    const order = await this.salesOrderService.createOnline(
+      {
+        branchId: warehouse.branchId,
+        salesRepId: systemUserId,
+        retailerId: retailer.id,
+        channel: 'DNP',
+        idempotencyKey,
+        notes,
+        items: items.map((item) => ({
+          productId: item.productId,
+          unitId: item.unitId,
+          batchId: item.batchId,
+          quantity: item.quantity,
+        })),
+      } as any,
+      systemUserId,
+      idempotencyKey,
+      { branchId: warehouse.branchId, retailerId: retailer.id, locationId: warehouse.inventoryLocation.id },
+    );
 
     await this.notificationService.create({
       retailerId,
       branchId: retailer.branchId,
       type: 'ORDER_CONFIRMED',
       title: 'Order Confirmed',
-      message: `Your order ${orderNo} has been placed successfully.`,
+      message: `Your order ${order.orderNo} has been placed successfully.`,
       entityType: 'SALES_ORDER' as ReferenceType,
       entityId: order.id,
     });
 
     await this.audit.record({
-      actorUserId: retailerId,
+      actorUserId: systemUserId,
       action: 'RETAILER_ORDER_PLACED',
       entityType: 'SALES_ORDER',
       entityId: order.id,
       branchId: retailer.branchId,
-      afterData: { orderNo, grandTotal: Number(order.grandTotal) },
+      afterData: { orderNo: order.orderNo, grandTotal: Number(order.grandTotal) },
     });
 
     return order;
   }
 
   async listOrders(retailerId: string, pagination: PaginationDto) {
-    const where = { retailerId };
+    const where: any = { retailerId };
     if (pagination.search) {
       where['orderNo'] = { contains: pagination.search, mode: 'insensitive' };
     }
@@ -171,17 +138,18 @@ export class RetailerOrderService {
       throw new AppError(ErrorCodes.NOT_FOUND, 'Order not found.', 404);
     }
 
+    if (order.status === 'CANCELLED') {
+      return this.getOrder(retailerId, orderId);
+    }
     if (!['DRAFT', 'CONFIRMED'].includes(order.status)) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Order cannot be cancelled in its current state.', 422);
     }
 
-    await this.prisma.salesOrder.update({
-      where: { id: orderId },
-      data: { status: 'CANCELLED' },
-    });
+    const systemUserId = '99999999-9999-4999-a999-999999999999';
+    await this.salesOrderService.cancel(orderId, systemUserId);
 
     await this.audit.record({
-      actorUserId: retailerId,
+      actorUserId: systemUserId,
       action: 'RETAILER_ORDER_CANCELLED',
       entityType: 'SALES_ORDER',
       entityId: orderId,

@@ -5,6 +5,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { DatabaseModule } from '../database/database.module';
 import { AuditModule } from '../audit/audit.module';
 import { SalesModule } from '../sales/sales.module';
+import { SalesOrdersModule } from '../sales-orders/sales-orders.module';
 import { FinanceModule } from '../finance/finance.module';
 import { RetailerAuthService } from './retailer-auth.service';
 import { RetailerAuthController } from './retailer-auth.controller';
@@ -33,6 +34,7 @@ import { RetailerJwtStrategy } from './retailer-jwt.strategy';
       }),
     }),
     SalesModule,
+    SalesOrdersModule,
   ],
   controllers: [
     RetailerAuthController,

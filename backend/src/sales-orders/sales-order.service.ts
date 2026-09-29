@@ -33,12 +33,14 @@ export class SalesOrderService {
     salesRepId?: string,
     status?: string,
     source?: string,
+    retailerOrder?: boolean,
   ) {
     const where: any = {};
     if (branchId) where.branchId = branchId;
     if (salesRepId) where.salesRepId = salesRepId;
     if (status) where.status = status;
     if (source) where.source = source;
+    if (retailerOrder !== undefined) where.retailerId = retailerOrder ? { not: null } : null;
     if (pagination.search) {
       where.orderNo = { contains: pagination.search, mode: "insensitive" };
     }
@@ -56,6 +58,9 @@ export class SalesOrderService {
           route: { select: { id: true, name: true, code: true } },
           retailer: {
             select: { id: true, shopName: true, ownerName: true, phone: true },
+          },
+          invoice: {
+            select: { id: true, invoiceNumber: true, status: true, paymentStatus: true, paidAmount: true, grandTotal: true },
           },
           _count: { select: { items: true } },
         },
@@ -205,7 +210,7 @@ export class SalesOrderService {
         if (
           !branch ||
           (!online && !retailer) ||
-          (retailer && (retailer.branchId !== branchId || retailer.status !== "ACTIVE"))
+          (retailer && ((retailer.branchId !== branchId && !(online && dto.channel === OrderSource.DNP)) || retailer.status !== "ACTIVE"))
         ) {
           throw new AppError(
             ErrorCodes.VALIDATION_ERROR,
@@ -557,15 +562,17 @@ export class SalesOrderService {
     actorUserId: string,
   ) {
     const updated = await this.prisma.$transaction(async (tx) => {
-      const rows = await tx.$queryRaw<Array<{ id: string; status: string; source: string; branchId: string | null }>>`
-        SELECT id, status, source, "branchId"
+      const rows = await tx.$queryRaw<Array<{ id: string; status: string; source: string; branchId: string | null; retailerId: string | null; invoiceId: string | null }>>`
+        SELECT id, status, source, "branchId", "retailerId", "invoiceId"
         FROM "SalesOrder"
         WHERE id = ${id}
         FOR UPDATE
       `;
       const order = rows[0];
       if (!order) throw new AppError(ErrorCodes.NOT_FOUND, "Sales order not found.", 404);
-      if (order.source !== "STOREFRONT") {
+      const franchiseRows = order.source === "FRANCHISE" ? await tx.$queryRaw<Array<{ exists: boolean }>>`
+        SELECT EXISTS(SELECT 1 FROM "FranchiseSupplyOrder" WHERE "salesOrderId" = ${id}) AS exists` : [];
+      if (order.source !== "STOREFRONT" && !(order.source === "DNP" && order.retailerId) && !(order.source === "FRANCHISE" && franchiseRows[0]?.exists)) {
         throw new AppError(ErrorCodes.VALIDATION_ERROR, "Only online orders can be progressed via this workflow.", 422);
       }
       if (order.status === status) return order;
@@ -575,12 +582,20 @@ export class SalesOrderService {
         PLACED: ["PICKING", "CANCELLED"],
         PICKING: ["PACKED", "CANCELLED"],
         PACKED: ["DISPATCHED", "CANCELLED"],
+        INVOICED: ["DISPATCHED"],
         DISPATCHED: ["DELIVERED"],
       };
+      if (order.source === "DNP" && order.retailerId && status === "DISPATCHED") {
+        if (!order.invoiceId) throw new AppError(ErrorCodes.VALIDATION_ERROR, "A posted retailer invoice is required before dispatch.", 422);
+        const invoice = await tx.invoice.findUnique({ where: { id: order.invoiceId }, select: { status: true } });
+        if (!invoice || !["CREDIT_OPEN", "POSTED"].includes(invoice.status)) {
+          throw new AppError(ErrorCodes.VALIDATION_ERROR, "Post the retailer invoice before dispatch.", 422);
+        }
+      }
       if (!validTransitions[order.status]?.includes(status)) {
         throw new AppError(ErrorCodes.VALIDATION_ERROR, `Cannot transition order from ${order.status} to ${status}.`, 422);
       }
-      if (status === "DISPATCHED") {
+      if (status === "DISPATCHED" && !(order.source === "DNP" && order.retailerId)) {
         if (!order.branchId) throw new AppError(ErrorCodes.VALIDATION_ERROR, "Online order has no warehouse branch.", 422);
         await this.stockReservation.consumeForOnlineDispatch(tx, {
           salesOrderId: id,
@@ -683,10 +698,11 @@ export class SalesOrderService {
   ) {
     const order = await this.findById(id);
 
-    if (order.status !== "CONFIRMED") {
+    const centralRetailerOrder = order.source === "DNP" && Boolean(order.retailerId);
+    if (order.status !== "CONFIRMED" && !(centralRetailerOrder && order.status === "PACKED")) {
       throw new AppError(
         ErrorCodes.VALIDATION_ERROR,
-        "Only CONFIRMED orders can be converted to invoices.",
+        "Only confirmed orders, or packed central-warehouse retailer orders, can be converted to invoices.",
         422,
       );
     }

@@ -21,6 +21,13 @@ async function main() {
     { code: 'warehouses.view', module: 'warehouses', action: 'view', description: 'View warehouses' },
     { code: 'warehouses.create', module: 'warehouses', action: 'create', description: 'Create warehouses' },
     { code: 'warehouses.update', module: 'warehouses', action: 'update', description: 'Update warehouses' },
+    { code: 'suppliers.view', module: 'suppliers', action: 'view', description: 'View suppliers' },
+    { code: 'suppliers.create', module: 'suppliers', action: 'create', description: 'Create suppliers' },
+    { code: 'suppliers.update', module: 'suppliers', action: 'update', description: 'Update and deactivate suppliers' },
+    { code: 'purchases.view', module: 'purchases', action: 'view', description: 'View purchase orders and receipts' },
+    { code: 'purchases.create', module: 'purchases', action: 'create', description: 'Create purchase orders' },
+    { code: 'purchases.confirm', module: 'purchases', action: 'confirm', description: 'Confirm and cancel purchase orders' },
+    { code: 'purchases.receive', module: 'purchases', action: 'receive', description: 'Receive supplier goods into warehouse stock' },
     // Products
     { code: 'products.view', module: 'products', action: 'view', description: 'View products' },
     { code: 'products.create', module: 'products', action: 'create', description: 'Create products' },
@@ -102,7 +109,8 @@ async function main() {
       description: 'Branch-scoped operational access',
       isSystemRole: true,
       permissions: [
-        'warehouses.view', 'products.view', 'batches.view',
+        'warehouses.view', 'products.view', 'batches.view', 'suppliers.view',
+        'purchases.view', 'purchases.create', 'purchases.confirm', 'purchases.receive',
         'inventory.view', 'inventory.adjust.create', 'inventory.adjust.approve',
         'retailers.view', 'retailers.create', 'retailers.update',
         'sales_reps.view', 'sales_reps.create',
@@ -119,6 +127,7 @@ async function main() {
       isSystemRole: true,
       permissions: [
         'warehouses.view', 'products.view', 'batches.view', 'batches.create',
+        'suppliers.view', 'purchases.view', 'purchases.create', 'purchases.confirm', 'purchases.receive',
         'inventory.view', 'inventory.adjust.create', 'inventory.adjust.post',
         'branches.view',
       ],

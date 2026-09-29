@@ -165,17 +165,19 @@ export class CatalogService {
     const product = await this.prisma.$transaction(async (tx) => {
       const p = await tx.product.create({ data: productData });
 
-      if (units && units.length > 0) {
-        for (const u of units) {
-          await tx.productUnit.create({
-            data: {
-              productId: p.id,
-              unitId: u.unitId,
-              conversionToBase: u.conversionToBase,
-              isBaseUnit: u.isBaseUnit,
-            },
-          });
-        }
+      const productUnits = [...(units ?? [])];
+      if (!productUnits.some((unit) => unit.unitId === productData.defaultUnitId)) {
+        productUnits.push({ unitId: productData.defaultUnitId, conversionToBase: 1, isBaseUnit: true });
+      }
+      for (const unit of productUnits) {
+        await tx.productUnit.create({
+          data: {
+            productId: p.id,
+            unitId: unit.unitId,
+            conversionToBase: unit.conversionToBase,
+            isBaseUnit: unit.isBaseUnit,
+          },
+        });
       }
 
       return p;

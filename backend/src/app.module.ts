@@ -23,6 +23,8 @@ import { DeliveryModule } from './deliveries/delivery.module';
 import { NotificationModule } from './notifications/notification.module';
 import { RetailerPortalModule } from './retailer-portal/retailer-portal.module';
 import { appConfigSchema } from './config/app.config';
+import { ProcurementModule } from './procurement/procurement.module';
+import { FranchiseModule } from './franchise/franchise.module';
 
 @Module({
   imports: [
@@ -65,6 +67,8 @@ import { appConfigSchema } from './config/app.config';
     DeliveryModule,
     NotificationModule,
     RetailerPortalModule,
+    ProcurementModule,
+    FranchiseModule,
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'public'),
       serveRoot: '/', // Serves files from public/uploads at /uploads/...

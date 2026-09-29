@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { RetailerOrderService } from './retailer-order.service';
 import { RetailerJwtAuthGuard } from './retailer-jwt-auth.guard';
@@ -27,8 +27,12 @@ export class RetailerOrderController {
 
   @Post()
   @ApiOperation({ summary: 'Place a new order' })
-  placeOrder(@CurrentRetailer() retailerId: string, @Body() dto: CreateRetailerOrderDto) {
-    return this.orderService.placeOrder(retailerId, dto.items, dto.notes);
+  placeOrder(
+    @CurrentRetailer() retailerId: string,
+    @Body() dto: CreateRetailerOrderDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.orderService.placeOrder(retailerId, dto.items, dto.notes, idempotencyKey);
   }
 
   @Post(':id/cancel')

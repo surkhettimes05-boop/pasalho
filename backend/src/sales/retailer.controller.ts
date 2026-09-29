@@ -5,19 +5,22 @@ import { CreateRetailerDto } from './dto/create-retailer.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/permissions.guard';
+import { ScopeGuard } from '../auth/scope.guard';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
+import { RequireScope } from '../auth/decorators/require-scope.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '@prisma/client';
 
 @ApiTags('retailers')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, ScopeGuard)
 @Controller('retailers')
 export class RetailerController {
   constructor(private readonly retailerService: RetailerService) {}
 
   @Get()
   @RequirePermissions('retailers.view')
+  @RequireScope('branch')
   @ApiOperation({ summary: 'List retailers' })
   @ApiQuery({ name: 'branchId', required: false })
   list(@Query() pagination: PaginationDto, @Query('branchId') branchId?: string) {
@@ -26,6 +29,7 @@ export class RetailerController {
 
   @Get(':id')
   @RequirePermissions('retailers.view')
+  @RequireScope('retailer')
   @ApiOperation({ summary: 'Get retailer' })
   findOne(@Param('id') id: string) {
     return this.retailerService.findById(id);
@@ -33,6 +37,7 @@ export class RetailerController {
 
   @Post()
   @RequirePermissions('retailers.create')
+  @RequireScope('branch')
   @ApiOperation({ summary: 'Create retailer' })
   create(@Body() dto: CreateRetailerDto, @CurrentUser() actor: User) {
     return this.retailerService.create(dto, actor.id);
@@ -40,6 +45,7 @@ export class RetailerController {
 
   @Patch(':id')
   @RequirePermissions('retailers.update')
+  @RequireScope('retailer')
   @ApiOperation({ summary: 'Update retailer' })
   update(@Param('id') id: string, @Body() dto: UpdateRetailerDto, @CurrentUser() actor: User) {
     return this.retailerService.update(id, dto, actor.id);
@@ -47,6 +53,7 @@ export class RetailerController {
 
   @Get(':id/ledger')
   @RequirePermissions('retailer_ledger.view')
+  @RequireScope('retailer')
   @ApiOperation({ summary: 'Get retailer credit ledger' })
   getLedger(@Param('id') id: string, @Query() pagination: PaginationDto) {
     return this.retailerService.getLedger(id, pagination);
@@ -54,6 +61,7 @@ export class RetailerController {
 
   @Get(':id/outstanding')
   @RequirePermissions('retailer_ledger.view')
+  @RequireScope('retailer')
   @ApiOperation({ summary: 'Get retailer outstanding balance' })
   getOutstanding(@Param('id') id: string) {
     return this.retailerService.getOutstanding(id);

@@ -98,22 +98,8 @@ export class TransferController {
     return this.transferService.dispatch(id, actor.id, idempotencyKey);
   }
 
-  @Post(":id/receive")
-  @RequirePermissions("inventory.transfer.receive")
-  @RequireScope("transfer")
-  @ApiOperation({
-    summary: "Receive transfer (add to destination, clear in-transit)",
-  })
-  receive(
-    @Param("id") id: string,
-    @Headers("idempotency-key") idempotencyKey: string | undefined,
-    @CurrentUser() actor: User,
-  ) {
-    return this.transferService.receive(id, actor.id, idempotencyKey);
-  }
-
   @Post(":id/retry-store-sync")
-  @RequirePermissions("inventory.transfer.receive")
+  @RequirePermissions("inventory.transfer.ship")
   @RequireScope("transfer")
   @ApiOperation({ summary: "Retry a pending store synchronization webhook" })
   retryStoreSync(@Param("id") id: string, @CurrentUser() actor: User) {

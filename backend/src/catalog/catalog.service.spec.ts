@@ -83,6 +83,20 @@ describe('CatalogService', () => {
       expect(result.id).toBe('prod-1');
     });
 
+    it('creates the default unit relationship when none are supplied', async () => {
+      (prisma.product!.create as jest.Mock).mockResolvedValue({ id: 'prod-default', skuCode: 'SKU-DEFAULT', name: 'Default unit product' });
+      (prisma.product!.findFirst as jest.Mock).mockResolvedValue({ id: 'prod-default', name: 'Default unit product', category: {}, brand: null, defaultUnit: {}, productUnits: [], batches: [] });
+
+      await catalog.createProduct(
+        { skuCode: 'SKU-DEFAULT', name: 'Default unit product', categoryId: 'cat-1', defaultUnitId: 'unit-default' },
+        'user-1',
+      );
+
+      expect(prisma.productUnit!.create).toHaveBeenCalledWith({
+        data: { productId: 'prod-default', unitId: 'unit-default', conversionToBase: 1, isBaseUnit: true },
+      });
+    });
+
     it('finds product by id with relations', async () => {
       (prisma.product!.findFirst as jest.Mock).mockResolvedValue({ id: 'prod-1', name: 'Test', category: {}, brand: null, defaultUnit: {}, productUnits: [], batches: [] });
       const result = await catalog.findProductById('prod-1');

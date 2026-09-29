@@ -8,6 +8,7 @@ import { AppError } from "../../common/errors/app-error";
 import { ErrorCodes } from "../../common/errors/error-codes";
 import { IdempotencyStatus, Prisma, StockTransferStatus } from "@prisma/client";
 import { PaginationDto } from "../../common/dto/pagination.dto";
+import { AcknowledgeStoreReceiptDto } from "../dto/acknowledge-store-receipt.dto";
 
 @Injectable()
 export class StockTransferService {
@@ -35,6 +36,14 @@ export class StockTransferService {
         skip: pagination.skip,
         take: pagination.limit,
         include: {
+          items: {
+            select: {
+              id: true,
+              quantity: true,
+              product: { select: { name: true, skuCode: true } },
+              unit: { select: { symbol: true } },
+            },
+          },
           fromBranch: true,
           toBranch: true,
           fromWarehouse: true,
@@ -347,24 +356,30 @@ export class StockTransferService {
       entityId: id,
       afterData: { status: StockTransferStatus.IN_TRANSIT },
     });
-    return this.findById(updated.id);
+    const result = await this.findById(updated.id);
+    await this.notifyStoreSync(result, actorUserId);
+    return result;
   }
 
   async ship(id: string, actorUserId: string, idempotencyKey?: string) {
     return this.dispatch(id, actorUserId, idempotencyKey);
   }
 
-  async receive(id: string, actorUserId: string, idempotencyKey?: string) {
+  async acknowledgeStoreReceipt(
+    id: string,
+    dto: AcknowledgeStoreReceiptDto,
+    idempotencyKey?: string,
+  ) {
     this.requireIdempotencyKey(idempotencyKey);
-    const requestHash = this.hash({ transferId: id, action: "receive" });
+    const requestHash = this.hash({ transferId: id, action: "store-receipt", ...dto });
     const updated = await this.prisma.$transaction(async (tx) => {
       await this.lockTransfer(tx, id);
       const transfer = await tx.stockTransfer.findUniqueOrThrow({
         where: { id },
-        include: { items: true },
+        include: { items: true, toBranch: true },
       });
-      if (transfer.status === StockTransferStatus.RECEIVED) return transfer;
       if (
+        transfer.status !== StockTransferStatus.RECEIVED &&
         transfer.status !== StockTransferStatus.IN_TRANSIT &&
         transfer.status !== StockTransferStatus.SHIPPED
       ) {
@@ -374,22 +389,51 @@ export class StockTransferService {
           422,
         );
       }
+      if (transfer.toBranch.code !== dto.destinationBranchCode) {
+        throw new AppError(
+          ErrorCodes.VALIDATION_ERROR,
+          "Receipt destination does not match the transfer destination.",
+          422,
+        );
+      }
+      const expected = new Map<string, number>();
+      for (const item of transfer.items) {
+        expected.set(item.productId, (expected.get(item.productId) ?? 0) + Number(item.quantity));
+      }
+      const received = new Map<string, number>();
+      for (const item of dto.items) {
+        if (received.has(item.productId)) {
+          throw new AppError(ErrorCodes.VALIDATION_ERROR, "Receipt contains a duplicate product.", 422);
+        }
+        received.set(item.productId, item.quantity);
+      }
+      const exact = received.size === expected.size && [...expected.entries()].every(
+        ([productId, quantity]) => received.get(productId) === quantity,
+      );
+      if (!exact) {
+        throw new AppError(
+          ErrorCodes.CONFLICT,
+          "Received quantities must exactly match the dispatched transfer.",
+          409,
+        );
+      }
+      if (transfer.status === StockTransferStatus.RECEIVED) return transfer;
       await this.beginIdempotency(
         tx,
-        "stock-transfer.receive",
+        "stock-transfer.store-receipt",
         idempotencyKey,
         requestHash,
       );
 
-      // Post inventory movements: IN_TRANSIT at origin -> AVAILABLE at destination
-      // 1. Deduct from origin IN_TRANSIT
+      // CEO Dashboard already posted store AVAILABLE stock atomically with the
+      // physical receipt. PASALO only clears its in-transit custody here.
       await this.inventoryLedger.postEvent(
         {
           eventType: "STOCK_TRANSFER",
           branchId: transfer.fromBranchId,
           referenceType: "STOCK_TRANSFER",
           referenceId: transfer.id,
-          createdById: actorUserId,
+          createdById: transfer.dispatchedById ?? transfer.createdById,
           idempotencyKey: `transfer-receive-origin-${transfer.id}`,
           movements: transfer.items.map((item) => ({
             locationId: transfer.fromLocationId,
@@ -400,60 +444,32 @@ export class StockTransferService {
             quantityDelta: -Number(item.quantity),
             baseQuantityDelta: -Number(item.baseQuantity),
             movementType: "TRANSFER_IN",
-            reasonCode: "TRANSFER_RECEIVE_OUT",
+            reasonCode: "STORE_RECEIPT_ACKNOWLEDGED",
           })),
         },
         tx,
       );
 
-      // 2. Add to destination AVAILABLE (use received quantity if provided, else full shipped qty)
-      const movements = transfer.items.map((item) => {
-        const receivedQty =
-          item.receivedQuantity !== null && item.receivedQuantity !== undefined
-            ? Number(item.receivedQuantity)
-            : Number(item.quantity);
-        const receivedBaseQty =
-          item.receivedBaseQuantity !== null &&
-          item.receivedBaseQuantity !== undefined
-            ? Number(item.receivedBaseQuantity)
-            : Number(item.baseQuantity);
-        return {
-          locationId: transfer.toLocationId,
-          productId: item.productId,
-          batchId: item.batchId || undefined,
-          unitId: item.unitId,
-          stockState: "AVAILABLE" as const,
-          quantityDelta: receivedQty,
-          baseQuantityDelta: receivedBaseQty,
-          movementType: "TRANSFER_IN" as const,
-          reasonCode: "TRANSFER_RECEIVE_IN",
-        };
-      });
-
-      await this.inventoryLedger.postEvent(
-        {
-          eventType: "STOCK_TRANSFER",
-          branchId: transfer.toBranchId,
-          referenceType: "STOCK_TRANSFER",
-          referenceId: transfer.id,
-          createdById: actorUserId,
-          idempotencyKey: `transfer-receive-dest-${transfer.id}`,
-          movements,
+      await Promise.all(transfer.items.map((item) => tx.stockTransferItem.update({
+        where: { id: item.id },
+        data: {
+          receivedQuantity: item.quantity,
+          receivedBaseQuantity: item.baseQuantity,
+          varianceQuantity: 0,
+          varianceBaseQuantity: 0,
         },
-        tx,
-      );
+      })));
 
       const result = await tx.stockTransfer.update({
         where: { id },
         data: {
           status: StockTransferStatus.RECEIVED,
-          receivedById: actorUserId,
           receivedAt: new Date(),
         },
       });
       await this.completeIdempotency(
         tx,
-        "stock-transfer.receive",
+        "stock-transfer.store-receipt",
         idempotencyKey,
         result.id,
       );
@@ -461,23 +477,21 @@ export class StockTransferService {
     });
 
     await this.audit.record({
-      actorUserId,
+      actorUserId: updated.dispatchedById ?? updated.createdById,
       action: "STOCK_TRANSFER_RECEIVED",
       entityType: "STOCK_TRANSFER",
       entityId: id,
       afterData: { status: StockTransferStatus.RECEIVED },
     });
-    const result = await this.findById(updated.id);
-    await this.notifyStoreSync(result, actorUserId);
-    return result;
+    return this.findById(updated.id);
   }
 
   async retryStoreSync(id: string, actorUserId: string) {
     const transfer = await this.findById(id);
-    if (transfer.status !== StockTransferStatus.RECEIVED) {
+    if (transfer.status !== StockTransferStatus.IN_TRANSIT) {
       throw new AppError(
         ErrorCodes.VALIDATION_ERROR,
-        "Only received transfers can retry store synchronization.",
+        "Only in-transit transfers can retry store synchronization.",
         409,
       );
     }
@@ -652,9 +666,7 @@ export class StockTransferService {
       items: transfer.items.map((item: any) => ({
         productId: item.productId,
         quantity:
-          item.receivedQuantity !== null && item.receivedQuantity !== undefined
-            ? Number(item.receivedQuantity)
-            : Number(item.quantity),
+          Number(item.quantity),
       })),
       idempotencyKey: transfer.id,
     };
@@ -672,7 +684,7 @@ export class StockTransferService {
     const metadata = (event.metadata ?? {}) as Record<string, any>;
     const webhookUrl = process.env.STORE_SYNC_WEBHOOK_URL ?? metadata.url;
 
-    // Rebuild only on first delivery from the final receipt. Retry uses the
+    // Rebuild only on first delivery after dispatch. Retry uses the
     // persisted payload and event identity without recalculating the event.
     const payload = {
       ...this.storeSyncPayload(transfer, event),
@@ -686,7 +698,7 @@ export class StockTransferService {
     });
     if (!webhookUrl) {
       this.logger.warn(
-        `Store sync remains pending for received transfer ${transfer.id}: STORE_SYNC_WEBHOOK_URL is not configured.`,
+        `Inbound transfer registration remains pending for transfer ${transfer.id}: STORE_SYNC_WEBHOOK_URL is not configured.`,
       );
       return;
     }
@@ -741,7 +753,7 @@ export class StockTransferService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(
-        `Store sync failed for received transfer ${event.referenceId}: ${message}`,
+        `Inbound transfer registration failed for transfer ${event.referenceId}: ${message}`,
       );
       await this.prisma.inventoryEvent.update({
         where: { id: event.id },
@@ -757,7 +769,7 @@ export class StockTransferService {
       });
       throw new AppError(
         ErrorCodes.INTERNAL_ERROR,
-        `Transfer received but store synchronization is pending: ${message}`,
+        `Transfer dispatched but inbound registration is pending: ${message}`,
         502,
       );
     } finally {

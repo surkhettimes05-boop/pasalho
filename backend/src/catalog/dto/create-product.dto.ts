@@ -98,6 +98,11 @@ export class CreateProductDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  packSize?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
   storefrontCategory?: string;
 
   @ApiPropertyOptional({ default: true })

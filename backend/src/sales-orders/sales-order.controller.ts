@@ -102,12 +102,14 @@ export class SalesOrderController {
   @ApiQuery({ name: "salesRepId", required: false })
   @ApiQuery({ name: "status", required: false })
   @ApiQuery({ name: "source", required: false })
+  @ApiQuery({ name: "retailerOrder", required: false, type: Boolean })
   list(
     @Query() pagination: PaginationDto,
     @Query("branchId") branchId?: string,
     @Query("salesRepId") salesRepId?: string,
     @Query("status") status?: string,
     @Query("source") source?: string,
+    @Query("retailerOrder") retailerOrder?: string,
   ) {
     return this.salesOrderService.list(
       pagination,
@@ -115,6 +117,7 @@ export class SalesOrderController {
       salesRepId,
       status,
       source,
+      retailerOrder === undefined ? undefined : retailerOrder === "true",
     );
   }
 

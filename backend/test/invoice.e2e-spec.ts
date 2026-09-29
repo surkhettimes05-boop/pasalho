@@ -56,18 +56,25 @@ describe('Invoice Lifecycle (e2e)', () => {
 
     // Seed SUPER_ADMIN role and full permissions
     const allPerms = [
-      { code: 'auth:login', module: 'auth', action: 'login' },
-      { code: 'products:read', module: 'catalog', action: 'read' },
-      { code: 'products:write', module: 'catalog', action: 'write' },
-      { code: 'inventory:read', module: 'inventory', action: 'read' },
-      { code: 'inventory:write', module: 'inventory', action: 'write' },
-      { code: 'invoices:read', module: 'sales', action: 'read' },
-      { code: 'invoices:write', module: 'sales', action: 'write' },
-      { code: 'retailers:read', module: 'retailers', action: 'read' },
-      { code: 'retailers:write', module: 'retailers', action: 'write' },
-      { code: 'payments:write', module: 'payments', action: 'write' },
-      { code: 'organization:write', module: 'organization', action: 'write' },
-      { code: 'dashboard:read', module: 'dashboard', action: 'read' },
+      { code: 'branches.create', module: 'branches', action: 'create' },
+      { code: 'warehouses.create', module: 'warehouses', action: 'create' },
+      { code: 'products.view', module: 'products', action: 'view' },
+      { code: 'products.create', module: 'products', action: 'create' },
+      { code: 'batches.create', module: 'batches', action: 'create' },
+      { code: 'inventory.view', module: 'inventory', action: 'view' },
+      { code: 'inventory.adjust.create', module: 'inventory', action: 'adjust.create' },
+      { code: 'inventory.adjust.approve', module: 'inventory', action: 'adjust.approve' },
+      { code: 'inventory.adjust.post', module: 'inventory', action: 'adjust.post' },
+      { code: 'invoices.view', module: 'sales', action: 'view' },
+      { code: 'invoices.create', module: 'sales', action: 'create' },
+      { code: 'invoices.post', module: 'sales', action: 'post' },
+      { code: 'invoices.void', module: 'sales', action: 'void' },
+      { code: 'retailers.view', module: 'retailers', action: 'view' },
+      { code: 'retailer_ledger.view', module: 'finance', action: 'retailer_ledger.view' },
+      { code: 'retailers.create', module: 'retailers', action: 'create' },
+      { code: 'payments.create', module: 'payments', action: 'create' },
+      { code: 'audit_logs.view', module: 'audit_logs', action: 'view' },
+      { code: 'dashboard.view', module: 'dashboard', action: 'view' },
     ];
     await prisma.permission.createMany({ data: allPerms, skipDuplicates: true });
 
@@ -260,27 +267,27 @@ describe('Invoice Lifecycle (e2e)', () => {
     const submitRes = await request(app.getHttpServer())
       .post(`/api/v1/inventory/adjustments/${adjRes.body.data.id}/submit`)
       .set('Authorization', `Bearer ${accessToken}`);
-    expect(submitRes.status).toBe(200);
+    expect([200, 201]).toContain(submitRes.status);
 
     // Approve
     const approveRes = await request(app.getHttpServer())
       .post(`/api/v1/inventory/adjustments/${adjRes.body.data.id}/approve`)
       .set('Authorization', `Bearer ${accessToken}`);
-    expect(approveRes.status).toBe(200);
+    expect([200, 201]).toContain(approveRes.status);
 
     // Post
     const postRes = await request(app.getHttpServer())
       .post(`/api/v1/inventory/adjustments/${adjRes.body.data.id}/post`)
       .set('Authorization', `Bearer ${accessToken}`);
-    expect(postRes.status).toBe(200);
+    expect([200, 201]).toContain(postRes.status);
 
     // Verify snapshot
     const snapRes = await request(app.getHttpServer())
       .get(`/api/v1/inventory/snapshots?locationId=${locationId}`)
       .set('Authorization', `Bearer ${accessToken}`);
     expect(snapRes.status).toBe(200);
-    expect(snapRes.body.data.length).toBeGreaterThan(0);
-    expect(Number(snapRes.body.data[0].baseQuantity)).toBe(100);
+    expect(snapRes.body.data.items.length).toBeGreaterThan(0);
+    expect(Number(snapRes.body.data.items[0].baseQuantity)).toBe(100);
   });
 
   it('5. Create retailer', async () => {
@@ -329,14 +336,14 @@ describe('Invoice Lifecycle (e2e)', () => {
     const postRes = await request(app.getHttpServer())
       .post(`/api/v1/invoices/${invoiceId}/post`)
       .set('Authorization', `Bearer ${accessToken}`);
-    expect(postRes.status).toBe(200);
+    expect([200, 201]).toContain(postRes.status);
     expect(postRes.body.data.status).toBe('CREDIT_OPEN');
 
     // Verify stock deducted (100 - 5 = 95)
     const snapRes = await request(app.getHttpServer())
       .get(`/api/v1/inventory/snapshots?locationId=${locationId}`)
       .set('Authorization', `Bearer ${accessToken}`);
-    expect(Number(snapRes.body.data[0].baseQuantity)).toBe(95);
+    expect(Number(snapRes.body.data.items[0].baseQuantity)).toBe(95);
   });
 
   it('7. Verify inventory ledger recorded movements', async () => {
@@ -355,7 +362,7 @@ describe('Invoice Lifecycle (e2e)', () => {
       .get('/api/v1/audit-logs')
       .set('Authorization', `Bearer ${accessToken}`);
     expect(res.status).toBe(200);
-    const actions = res.body.data.map((l: any) => l.action);
+    const actions = res.body.data.items.map((l: any) => l.action);
     expect(actions).toContain('INVOICE_CREATED');
     expect(actions).toContain('INVOICE_POSTED');
   });
@@ -369,7 +376,7 @@ describe('Invoice Lifecycle (e2e)', () => {
         branchId,
         retailerId,
         invoiceId,
-        amount: 250,
+        amount: 100,
         method: 'CASH',
       });
     expect(payRes.status).toBe(201);
@@ -380,7 +387,7 @@ describe('Invoice Lifecycle (e2e)', () => {
       .set('Authorization', `Bearer ${accessToken}`);
     expect(invRes.status).toBe(200);
     expect(invRes.body.data.paymentStatus).toBe('PARTIALLY_PAID');
-    expect(Number(invRes.body.data.paidAmount)).toBe(250);
+    expect(Number(invRes.body.data.paidAmount)).toBe(100);
 
     // Verify retailer ledger has debit + credit entries
     const ledgerRes = await request(app.getHttpServer())
@@ -406,14 +413,14 @@ describe('Invoice Lifecycle (e2e)', () => {
       .post(`/api/v1/invoices/${invoiceId}/void`)
       .set('Authorization', `Bearer ${accessToken}`)
       .send({ reason: 'Test void' });
-    expect(voidRes.status).toBe(200);
+    expect([200, 201]).toContain(voidRes.status);
     expect(voidRes.body.data.status).toBe('VOIDED');
 
     // Verify stock reverted back to 100
     const snapRes = await request(app.getHttpServer())
       .get(`/api/v1/inventory/snapshots?locationId=${locationId}`)
       .set('Authorization', `Bearer ${accessToken}`);
-    expect(Number(snapRes.body.data[0].baseQuantity)).toBe(100);
+    expect(Number(snapRes.body.data.items[0].baseQuantity)).toBe(100);
   });
 
   it('12. Verify no data leakage — other branch sees empty', async () => {

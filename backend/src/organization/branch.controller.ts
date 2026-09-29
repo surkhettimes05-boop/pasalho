@@ -6,19 +6,22 @@ import { UpdateBranchDto } from './dto/update-branch.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/permissions.guard';
+import { ScopeGuard } from '../auth/scope.guard';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
+import { RequireScope } from '../auth/decorators/require-scope.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '@prisma/client';
 
 @ApiTags('branches')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, ScopeGuard)
 @Controller('branches')
 export class BranchController {
   constructor(private readonly branchService: BranchService) {}
 
   @Get()
   @RequirePermissions('branches.view')
+  @RequireScope('branch')
   @ApiOperation({ summary: 'List branches' })
   list(@Query() pagination: PaginationDto) {
     return this.branchService.list(pagination);
@@ -26,6 +29,7 @@ export class BranchController {
 
   @Get(':id')
   @RequirePermissions('branches.view')
+  @RequireScope('branch')
   @ApiOperation({ summary: 'Get branch' })
   findOne(@Param('id') id: string) {
     return this.branchService.findById(id);
@@ -40,6 +44,7 @@ export class BranchController {
 
   @Patch(':id')
   @RequirePermissions('branches.update')
+  @RequireScope('branch')
   @ApiOperation({ summary: 'Update branch' })
   update(@Param('id') id: string, @Body() dto: UpdateBranchDto, @CurrentUser() actor: User) {
     return this.branchService.update(id, dto, actor.id);
@@ -47,6 +52,7 @@ export class BranchController {
 
   @Delete(':id')
   @RequirePermissions('branches.update')
+  @RequireScope('branch')
   @ApiOperation({ summary: 'Deactivate branch' })
   deactivate(@Param('id') id: string, @CurrentUser() actor: User) {
     return this.branchService.deactivate(id, actor.id);
