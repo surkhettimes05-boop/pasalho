@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger'
 import { StoreService } from './store.service';
 import { CreateStoreDto } from './dto/create-store.dto';
 import { UpdateStoreDto } from './dto/update-store.dto';
-import { PaginationDto } from '../common/dto/pagination.dto';
+import { ListStoreQueryDto } from './dto/list-store-query.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { ScopeGuard } from '../auth/scope.guard';
@@ -24,8 +24,8 @@ export class StoreController {
   @RequireScope('branch')
   @ApiOperation({ summary: 'List stores' })
   @ApiQuery({ name: 'branchId', required: false })
-  list(@Query() pagination: PaginationDto, @Query('branchId') branchId?: string) {
-    return this.storeService.list(pagination, branchId);
+  list(@Query() query: ListStoreQueryDto) {
+    return this.storeService.list(query, query.branchId);
   }
 
   @Get(':id')
