@@ -9,9 +9,8 @@ import { Select } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table';
 import { Badge, statusVariant } from '@/components/ui/badge';
-import { InventorySnapshot } from '@/lib/api/inventory';
+import { InventorySnapshot, inventoryApi } from '@/lib/api/inventory';
 import { organizationApi, Warehouse } from '@/lib/api/organization';
-import { api } from '@/lib/api/client';
 import { formatNumber, formatDateTime } from '@/lib/utils/cn';
 import { MovementsPanel } from './_components/MovementsPanel';
 
@@ -42,21 +41,23 @@ export default function StockPage() {
     queryKey: ['stock-snapshots', warehouseId],
     queryFn: async () => {
       if (!warehouseId) return { items: [], total: 0, page: 1, limit: 50 };
-      // Backend exposes /inventory/snapshots — no filter param known, just paginate.
-      try {
-        const res = (await api.get(
-          `/inventory/snapshots?page=1&limit=100`,
-        )) as { items: InventorySnapshot[]; total: number; page: number; limit: number };
-        return res ?? { items: [], total: 0, page: 1, limit: 50 };
-      } catch {
-        return { items: [], total: 0, page: 1, limit: 50 };
-      }
+      return inventoryApi.getSnapshots({ warehouseId, page: 1, limit: 100 });
     },
     enabled: !!warehouseId,
     refetchInterval: 10000, // 10s real-time refresh
   });
 
-  const items: InventorySnapshot[] = (snapshotsQ.data?.items ?? []).filter((s) => {
+  const snapshots: InventorySnapshot[] = snapshotsQ.data?.items ?? [];
+  const grouped = new Map<string, { snapshot: InventorySnapshot; onHand: number; reserved: number }>();
+  for (const snapshot of snapshots) {
+    const key = `${snapshot.productId}:${snapshot.unitId}`;
+    const current = grouped.get(key) ?? { snapshot, onHand: 0, reserved: 0 };
+    if (snapshot.stockState === 'RESERVED') current.reserved += Number(snapshot.baseQuantity ?? snapshot.quantity);
+    else if (snapshot.stockState === 'AVAILABLE') current.onHand += Number(snapshot.baseQuantity ?? snapshot.quantity);
+    grouped.set(key, current);
+  }
+  const items = [...grouped.values()].filter(({ snapshot }) => {
+    const s = snapshot;
     if (!search.trim()) return true;
     const q = search.toLowerCase();
     return (
@@ -72,7 +73,7 @@ export default function StockPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Stock</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Live inventory across all warehouses (auto-refreshes every 10s)
+            On hand, reserved, and available stock at the selected warehouse.
           </p>
         </div>
         <div className="flex gap-2">
@@ -142,14 +143,15 @@ export default function StockPage() {
                   <TH>Product</TH>
                   <TH>Batch</TH>
                   <TH>Unit</TH>
-                  <TH className="text-right">Available</TH>
+                  <TH className="text-right">On Hand</TH>
                   <TH className="text-right">Reserved</TH>
+                  <TH className="text-right">Available</TH>
                   <TH>State</TH>
                   <TH>Last Updated</TH>
                 </TR>
               </THead>
               <TBody>
-                {items.map((s) => (
+                {items.map(({ snapshot: s, onHand, reserved }) => (
                   <TR
                     key={s.id}
                     onClick={() => setSelected(s)}
@@ -161,10 +163,13 @@ export default function StockPage() {
                     <TD>
                       {s.unit?.symbol ?? '—'}
                     </TD>
-                    <TD className="text-right tabular-nums">{formatNumber(s.quantity)}</TD>
-                    <TD className="text-right tabular-nums text-slate-500">—</TD>
+                    <TD className="text-right tabular-nums">{formatNumber(onHand + reserved)}</TD>
+                    <TD className="text-right tabular-nums text-slate-500">{formatNumber(reserved)}</TD>
+                    <TD className="text-right tabular-nums">{formatNumber(onHand)}</TD>
                     <TD>
-                      <Badge variant={statusVariant(s.stockState)}>{s.stockState}</Badge>
+                      <Badge variant={statusVariant(onHand < 10 ? (onHand <= 0 ? 'OUT_OF_STOCK' : 'LOW_STOCK') : 'AVAILABLE')}>
+                        {onHand <= 0 ? 'OUT OF STOCK' : onHand < 10 ? 'LOW STOCK' : 'AVAILABLE'}
+                      </Badge>
                     </TD>
                     <TD className="text-xs text-slate-500">{formatDateTime(s.updatedAt)}</TD>
                   </TR>

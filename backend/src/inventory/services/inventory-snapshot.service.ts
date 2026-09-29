@@ -7,6 +7,7 @@ import { ErrorCodes } from '../../common/errors/error-codes';
 
 export interface SnapshotFilter {
   branchId?: string;
+  warehouseId?: string;
   locationId?: string;
   productId?: string;
   stockState?: StockState;
@@ -39,6 +40,9 @@ export class InventorySnapshotService {
     // Branch filter — go through location -> branch
     if (filter.branchId) {
       where.location = { branchId: filter.branchId };
+    }
+    if (filter.warehouseId) {
+      where.location = { ...(where.location as Prisma.InventoryLocationWhereInput | undefined), warehouseId: filter.warehouseId };
     }
 
     // Search by product name / SKU / barcode

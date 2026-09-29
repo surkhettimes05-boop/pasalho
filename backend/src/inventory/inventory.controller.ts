@@ -31,6 +31,7 @@ export class InventoryController {
   @RequirePermissions('inventory.view')
   @ApiOperation({ summary: 'List inventory snapshots with filters' })
   @ApiQuery({ name: 'locationId', required: false })
+  @ApiQuery({ name: 'warehouseId', required: false })
   @ApiQuery({ name: 'branchId', required: false })
   @ApiQuery({ name: 'productId', required: false })
   @ApiQuery({ name: 'lowStock', required: false, type: Boolean })
@@ -39,6 +40,7 @@ export class InventoryController {
   getSnapshots(
     @Query() pagination: PaginationDto,
     @Query('locationId') locationId?: string,
+    @Query('warehouseId') warehouseId?: string,
     @Query('branchId') branchId?: string,
     @Query('productId') productId?: string,
     @Query('lowStock') lowStock?: string,
@@ -48,7 +50,7 @@ export class InventoryController {
     const lowStockBool = lowStock === 'true';
     const threshold = lowStockThreshold ? Number(lowStockThreshold) : undefined;
     return this.snapshotService.listSnapshots(
-      { locationId, branchId, productId, lowStock: lowStockBool, lowStockThreshold: threshold, search },
+      { locationId, warehouseId, branchId, productId, lowStock: lowStockBool, lowStockThreshold: threshold, search },
       pagination,
     );
   }
