@@ -50,6 +50,14 @@ export class ScopeGuard implements CanActivate {
 
     const targets = await this.resolveTargets(scope, request);
     if (targets.branchIds.length === 0 && targets.warehouseIds.length === 0) {
+      if (scope === 'franchise-order' && request.params?.action === 'receive') {
+        const order = await this.prisma.franchiseSupplyOrder.findUnique({
+          where: { id: request.params.id }, select: { store: { select: { branchId: true } } },
+        });
+        if (order && !order.store.branchId) {
+          throw new AppError(ErrorCodes.VALIDATION_ERROR, 'FRANCHISE_BRANCH_REQUIRED: assign a branch to this franchise store before receiving inventory.', 422);
+        }
+      }
       throw new AppError(
         ErrorCodes.VALIDATION_ERROR,
         'A branch or warehouse scope is required for this operation.',
@@ -136,6 +144,23 @@ export class ScopeGuard implements CanActivate {
           add(branchIds, resource.branchId);
           await addWarehouse(resource.warehouseId ?? undefined);
         }
+      }
+      if (scope === 'franchise-store' && id) {
+        const resource = await this.prisma.franchiseStore.findUnique({ where: { id }, select: { branchId: true } });
+        add(branchIds, resource?.branchId ?? undefined);
+        add(branchIds, body.branchId);
+      }
+      if (scope === 'franchise-order' && id) {
+        const resource = await this.prisma.franchiseSupplyOrder.findUnique({
+          where: { id }, select: { store: { select: { branchId: true } }, salesOrder: { select: { branchId: true } } },
+        });
+        if (params.action === 'receive') add(branchIds, resource?.store.branchId ?? undefined);
+        else if (params.action === 'approve' && !resource?.salesOrder) {
+          const source = await this.prisma.warehouse.findFirst({
+            where: { status: 'ACTIVE' }, orderBy: { createdAt: 'asc' }, select: { branchId: true },
+          });
+          add(branchIds, source?.branchId);
+        } else add(branchIds, resource?.salesOrder?.branchId ?? undefined);
       }
       if (scope === 'sales-rep' && id) {
         const resource = await this.prisma.salesRep.findUnique({ where: { id }, select: { branchId: true } });

@@ -27,8 +27,12 @@ describe("Sales-order transaction (real PostgreSQL)", () => {
   let invoiceService: InvoiceService;
   let retailerOrders: RetailerOrderService;
   let franchiseOrderId: string | undefined;
+  const franchiseOrderIds: string[] = [];
   let franchiseStoreId: string | undefined;
+  const franchiseStoreIds: string[] = [];
   let franchisePartnerId: string | undefined;
+  const franchisePartnerIds: string[] = [];
+  let franchiseSecondaryBranchId: string | undefined;
   const prefix = `sales-order-it-${Date.now()}-${randomUUID().slice(0, 8)}`;
 
   const dto = (quantity: number, idempotencyKey: string): CreateSalesOrderDto => ({
@@ -114,20 +118,21 @@ describe("Sales-order transaction (real PostgreSQL)", () => {
   });
 
   const resetInventory = async () => {
-    if (franchiseOrderId) {
-      await prisma.franchiseSupplyOrderItem.deleteMany({ where: { orderId: franchiseOrderId } });
-      await prisma.franchiseSupplyOrderEvent.deleteMany({ where: { orderId: franchiseOrderId } });
-      await prisma.franchiseSupplyOrder.deleteMany({ where: { id: franchiseOrderId } });
-      franchiseOrderId = undefined;
+    const receiptOrderIds = [...new Set([...franchiseOrderIds, ...(franchiseOrderId ? [franchiseOrderId] : [])])];
+    const storeIds = [...new Set([...franchiseStoreIds, ...(franchiseStoreId ? [franchiseStoreId] : [])])];
+    const partnerIds = [...new Set([...franchisePartnerIds, ...(franchisePartnerId ? [franchisePartnerId] : [])])];
+    const franchiseStores = storeIds.length ? await prisma.franchiseStore.findMany({
+      where: { id: { in: storeIds } }, select: { id: true, inventoryLocationId: true },
+    }) : [];
+    const franchiseLocationIds = franchiseStores.flatMap((store) => store.inventoryLocationId ? [store.inventoryLocationId] : []);
+    if (receiptOrderIds.length) {
+      await prisma.franchiseSupplyOrderItem.deleteMany({ where: { orderId: { in: receiptOrderIds } } });
+      await prisma.franchiseSupplyOrderEvent.deleteMany({ where: { orderId: { in: receiptOrderIds } } });
+      await prisma.franchiseSupplyOrder.deleteMany({ where: { id: { in: receiptOrderIds } } });
     }
-    if (franchiseStoreId) {
-      await prisma.franchiseStore.deleteMany({ where: { id: franchiseStoreId } });
-      franchiseStoreId = undefined;
-    }
-    if (franchisePartnerId) {
-      await prisma.franchisePartner.deleteMany({ where: { id: franchisePartnerId } });
-      franchisePartnerId = undefined;
-    }
+    if (storeIds.length) await prisma.franchiseStore.updateMany({ where: { id: { in: storeIds } }, data: { inventoryLocationId: null } });
+    franchiseOrderIds.length = 0;
+    franchiseOrderId = undefined;
     await prisma.retailerNotification.deleteMany({ where: { branchId } });
     await prisma.retailerLedgerEntry.deleteMany({ where: { branchId } });
     await prisma.financialLedgerEntry.deleteMany({ where: { branchId } });
@@ -140,9 +145,30 @@ describe("Sales-order transaction (real PostgreSQL)", () => {
     await prisma.idempotencyRecord.deleteMany({
       where: { scope: "sales-order.create", key: { startsWith: prefix } },
     });
-    await prisma.inventoryMovement.deleteMany({ where: { branchId } });
-    await prisma.inventoryEvent.deleteMany({ where: { branchId } });
-    await prisma.inventorySnapshot.deleteMany({ where: { locationId } });
+    const receiptEvents = receiptOrderIds.length ? await prisma.inventoryEvent.findMany({
+      where: { referenceType: 'FRANCHISE_RECEIPT', referenceId: { in: receiptOrderIds } }, select: { id: true },
+    }) : [];
+    await prisma.inventoryMovement.deleteMany({ where: { OR: [
+      { branchId },
+      ...(franchiseLocationIds.length ? [{ locationId: { in: franchiseLocationIds } }] : []),
+      ...(receiptEvents.length ? [{ inventoryEventId: { in: receiptEvents.map((event) => event.id) } }] : []),
+    ] } });
+    await prisma.inventoryEvent.deleteMany({ where: { OR: [
+      { branchId },
+      ...(receiptOrderIds.length ? [{ referenceType: 'FRANCHISE_RECEIPT' as const, referenceId: { in: receiptOrderIds } }] : []),
+    ] } });
+    await prisma.inventorySnapshot.deleteMany({ where: { locationId: { in: [locationId, ...franchiseLocationIds] } } });
+    if (franchiseLocationIds.length) await prisma.inventoryLocation.deleteMany({ where: { id: { in: franchiseLocationIds } } });
+    if (storeIds.length) await prisma.franchiseStore.deleteMany({ where: { id: { in: storeIds } } });
+    franchiseStoreIds.length = 0;
+    franchiseStoreId = undefined;
+    if (partnerIds.length) await prisma.franchisePartner.deleteMany({ where: { id: { in: partnerIds } } });
+    franchisePartnerIds.length = 0;
+    franchisePartnerId = undefined;
+    if (franchiseSecondaryBranchId) {
+      await prisma.branch.deleteMany({ where: { id: franchiseSecondaryBranchId } });
+      franchiseSecondaryBranchId = undefined;
+    }
     await prisma.batch.deleteMany({ where: { productId } });
     await prisma.product.update({ where: { id: productId }, data: { isBatchTracked: false, isExpiryTracked: false } });
   };
@@ -320,6 +346,7 @@ describe("Sales-order transaction (real PostgreSQL)", () => {
   });
 
   afterAll(async () => {
+    await resetInventory();
     await prisma.retailerNotification.deleteMany({ where: { branchId } });
     await prisma.auditLog.deleteMany({ where: { actorUserId: userId } });
     await prisma.retailerLedgerEntry.deleteMany({ where: { branchId } });
@@ -877,15 +904,18 @@ describe("Sales-order transaction (real PostgreSQL)", () => {
 
   it("reserves, dispatches, and replays a batch-tracked franchise order exactly once", async () => {
     await seedBatchStock([{ name: "franchise", quantity: 80, expiryDate: new Date("2027-01-01T00:00:00Z") }]);
-    const franchise = new FranchiseService(prisma, salesOrders);
+    const franchise = new FranchiseService(prisma, salesOrders, new InventoryLedgerService(prisma));
     const partner = await franchise.createPartner({ name: `${prefix} partner`, phone: "9800000000" });
     franchisePartnerId = String((partner as any).id);
-    const store = await franchise.createStore({ partnerId: String((partner as any).id), name: `${prefix} franchise`, address: "Test" });
+    franchisePartnerIds.push(franchisePartnerId);
+    const store = await franchise.createStore({ partnerId: String((partner as any).id), branchId, name: `${prefix} franchise`, address: "Test" });
     franchiseStoreId = String((store as any).id);
+    franchiseStoreIds.push(franchiseStoreId);
     const supply = await franchise.createSupplyOrder({
       storeId: String((store as any).id), items: [{ productId, unitId, quantity: 10 }],
     }, userId);
     franchiseOrderId = String((supply as any).id);
+    franchiseOrderIds.push(franchiseOrderId);
     const approved = await franchise.transition(String((supply as any).id), "approve", userId);
     const salesOrderId = String((approved as any).salesOrderId);
     expect((await batchBalances()).map((row) => [row.stockState, Number(row.baseQuantity)])).toEqual([["AVAILABLE", 70], ["RESERVED", 10]]);
@@ -897,6 +927,126 @@ describe("Sales-order transaction (real PostgreSQL)", () => {
     expect((await batchBalances())
       .filter((row) => Number(row.baseQuantity) > 0)
       .map((row) => [row.stockState, Number(row.baseQuantity)])).toEqual([["AVAILABLE", 70]]);
+    const received = await franchise.transition(String((supply as any).id), "receive", userId);
+    const storeAfterReceipt = await prisma.franchiseStore.findUniqueOrThrow({ where: { id: franchiseStoreId! }, select: { inventoryLocationId: true } });
+    const franchiseLocationId = String(storeAfterReceipt.inventoryLocationId);
+    expect((received as any).status).toBe("RECEIVED");
+    expect(await prisma.inventoryLocation.findUniqueOrThrow({ where: { id: franchiseLocationId } })).toMatchObject({ branchId, type: "FRANCHISE_STORE" });
+    const receiptMovements = await prisma.inventoryMovement.findMany({ where: { referenceType: "FRANCHISE_RECEIPT", referenceId: franchiseOrderId, locationId: franchiseLocationId } });
+    expect(receiptMovements).toHaveLength(1);
+    expect(receiptMovements.reduce((sum, movement) => sum + Number(movement.baseQuantityDelta), 0)).toBe(10);
+    await franchise.transition(String((supply as any).id), "receive", userId);
+    expect(await prisma.inventoryMovement.count({ where: { referenceType: "FRANCHISE_RECEIPT", referenceId: franchiseOrderId } })).toBe(1);
+    expect(Number((await prisma.inventorySnapshot.findFirstOrThrow({ where: { locationId: franchiseLocationId, productId, stockState: "AVAILABLE" } })).baseQuantity)).toBe(10);
+    expect((await batchBalances()).filter((row) => row.stockState === "AVAILABLE").reduce((sum, row) => sum + Number(row.baseQuantity), 0)).toBe(70);
+  });
+
+  it("receives exact multi-batch allocations, reuses locations, and isolates franchise branches", async () => {
+    await seedBatchStock([
+      { name: "franchise-a", quantity: 6, expiryDate: new Date("2027-01-01T00:00:00Z") },
+      { name: "franchise-b", quantity: 20, expiryDate: new Date("2027-02-01T00:00:00Z") },
+    ]);
+    const franchise = new FranchiseService(prisma, salesOrders, new InventoryLedgerService(prisma));
+    const partner = await franchise.createPartner({ name: `${prefix} multi partner`, phone: "9800000001" });
+    franchisePartnerId = String((partner as any).id);
+    franchisePartnerIds.push(franchisePartnerId);
+    const storeA = await franchise.createStore({ partnerId: franchisePartnerId, branchId, name: `${prefix} franchise A`, address: "Branch A" });
+    franchiseStoreId = String((storeA as any).id);
+    franchiseStoreIds.push(franchiseStoreId);
+    const branchB = await prisma.branch.create({ data: {
+      code: `${prefix}-branch-b`, name: "Franchise branch B", city: "Test city", district: "Test district",
+    } });
+    franchiseSecondaryBranchId = branchB.id;
+    const storeB = await franchise.createStore({ partnerId: franchisePartnerId, branchId: branchB.id, name: `${prefix} franchise B`, address: "Branch B" });
+    const storeBId = String((storeB as any).id);
+    franchiseStoreIds.push(storeBId);
+
+    const createOrder = async (storeId: string, quantity: number) => {
+      const supply = await franchise.createSupplyOrder({ storeId, items: [{ productId, unitId, quantity }] }, userId) as any;
+      franchiseOrderId = String(supply.id);
+      franchiseOrderIds.push(franchiseOrderId);
+      await franchise.transition(franchiseOrderId, "approve", userId);
+      await franchise.transition(franchiseOrderId, "pick", userId);
+      await franchise.transition(franchiseOrderId, "pack", userId);
+      await franchise.transition(franchiseOrderId, "dispatch", userId);
+      return supply;
+    };
+    const first = await createOrder(franchiseStoreId, 10);
+    const firstSalesOrderId = (await prisma.franchiseSupplyOrder.findUniqueOrThrow({ where: { id: String(first.id) }, select: { salesOrderId: true } })).salesOrderId!;
+    const firstLines = await prisma.stockReservationItem.findMany({
+      where: { reservation: { salesOrderId: firstSalesOrderId } },
+      include: { batch: { select: { batchNumber: true } } },
+    });
+    expect(firstLines.map((line) => [line.batch?.batchNumber, Number(line.baseQuantity)]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))).toEqual([
+      [`${prefix}-franchise-a`, 6], [`${prefix}-franchise-b`, 4],
+    ].sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+    expect((await batchBalances()).reduce((sum, row) => sum + Number(row.baseQuantity), 0)).toBe(16);
+    await franchise.transition(franchiseOrderId!, "receive", userId);
+    const storeALocationId = (await prisma.franchiseStore.findUniqueOrThrow({ where: { id: franchiseStoreId }, select: { inventoryLocationId: true } })).inventoryLocationId!;
+    const firstReceipt = await prisma.inventorySnapshot.findMany({ where: { locationId: storeALocationId, productId, stockState: "AVAILABLE" }, include: { batch: { select: { batchNumber: true } } } });
+    expect(firstReceipt.map((row) => [row.batch?.batchNumber, Number(row.baseQuantity)]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))).toEqual([
+      [`${prefix}-franchise-a`, 6], [`${prefix}-franchise-b`, 4],
+    ].sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+    await franchise.transition(franchiseOrderId!, "receive", userId);
+    expect(await prisma.inventoryMovement.count({ where: { referenceType: "FRANCHISE_RECEIPT", referenceId: franchiseOrderId } })).toBe(2);
+    expect((await batchBalances()).reduce((sum, row) => sum + Number(row.baseQuantity), 0)).toBe(16);
+
+    const second = await createOrder(franchiseStoreId, 2);
+    await franchise.transition(franchiseOrderId!, "receive", userId);
+    const reusedStore = await prisma.franchiseStore.findUniqueOrThrow({ where: { id: franchiseStoreId }, select: { inventoryLocationId: true, branchId: true } });
+    expect(reusedStore.inventoryLocationId).toBe(storeALocationId);
+    expect(reusedStore.branchId).toBe(branchId);
+    expect(await prisma.inventoryLocation.count({ where: { type: "FRANCHISE_STORE", branchId } })).toBe(1);
+    expect((await prisma.inventorySnapshot.findMany({ where: { locationId: storeALocationId, productId, stockState: "AVAILABLE" } })).reduce((sum, row) => sum + Number(row.baseQuantity), 0)).toBe(12);
+
+    const third = await createOrder(storeBId, 1);
+    await franchise.transition(franchiseOrderId!, "receive", userId);
+    const storeBLocationId = (await prisma.franchiseStore.findUniqueOrThrow({ where: { id: storeBId }, select: { inventoryLocationId: true } })).inventoryLocationId!;
+    expect(storeBLocationId).not.toBe(storeALocationId);
+    expect(await prisma.inventoryLocation.findUniqueOrThrow({ where: { id: storeBLocationId } })).toMatchObject({ branchId: branchB.id, type: "FRANCHISE_STORE" });
+    expect((await prisma.inventorySnapshot.findMany({ where: { locationId: storeBLocationId, productId, stockState: "AVAILABLE" } })).reduce((sum, row) => sum + Number(row.baseQuantity), 0)).toBe(1);
+    expect((await prisma.inventorySnapshot.findMany({ where: { locationId: storeALocationId, productId, stockState: "AVAILABLE" } })).reduce((sum, row) => sum + Number(row.baseQuantity), 0)).toBe(12);
+    expect((await batchBalances()).reduce((sum, row) => sum + Number(row.baseQuantity), 0)).toBe(13);
+    expect((await prisma.franchiseSupplyOrder.findMany({ where: { id: { in: [String(first.id), String(second.id), String(third.id)] } }, select: { status: true } })).every((row) => row.status === "RECEIVED")).toBe(true);
+  });
+
+  it("rejects missing branch and invalid receipt and rolls back location creation on failure", async () => {
+    await seedBatchStock([{ name: "franchise-rollback", quantity: 20, expiryDate: new Date("2027-01-01T00:00:00Z") }]);
+    const franchise = new FranchiseService(prisma, salesOrders, new InventoryLedgerService(prisma));
+    const partner = await franchise.createPartner({ name: `${prefix} legacy partner`, phone: "9800000002" });
+    franchisePartnerId = String((partner as any).id);
+    franchisePartnerIds.push(franchisePartnerId);
+    const legacyStore = await prisma.franchiseStore.create({ data: {
+      partnerId: franchisePartnerId, branchId: null, name: `${prefix} unassigned franchise`, address: "Needs branch",
+    } });
+    franchiseStoreId = legacyStore.id;
+    franchiseStoreIds.push(franchiseStoreId);
+    const supply = await franchise.createSupplyOrder({ storeId: legacyStore.id, items: [{ productId, unitId, quantity: 10 }] }, userId) as any;
+    franchiseOrderId = String(supply.id);
+    franchiseOrderIds.push(franchiseOrderId);
+    await expect(franchise.transition(franchiseOrderId, "receive", userId)).rejects.toMatchObject({ statusCode: 422 });
+    const approved = await franchise.transition(franchiseOrderId, "approve", userId) as any;
+    await expect(franchise.transition(franchiseOrderId, "receive", userId)).rejects.toMatchObject({ statusCode: 422 });
+    await franchise.transition(franchiseOrderId, "pick", userId);
+    await franchise.transition(franchiseOrderId, "pack", userId);
+    await franchise.transition(franchiseOrderId, "dispatch", userId);
+    await expect(franchise.transition(franchiseOrderId, "receive", userId)).rejects.toThrow(/FRANCHISE_BRANCH_REQUIRED/);
+    expect((await prisma.franchiseStore.findUniqueOrThrow({ where: { id: legacyStore.id } })).inventoryLocationId).toBeNull();
+    expect((await prisma.franchiseSupplyOrder.findUniqueOrThrow({ where: { id: franchiseOrderId } })).status).toBe("DISPATCHED");
+    expect(await prisma.inventoryMovement.count({ where: { referenceType: "FRANCHISE_RECEIPT", referenceId: franchiseOrderId } })).toBe(0);
+
+    await franchise.assignStoreBranch(legacyStore.id, branchId);
+    const failingLedger = { postEvent: jest.fn().mockRejectedValue(new Error("forced receipt failure")) } as unknown as InventoryLedgerService;
+    const failingFranchise = new FranchiseService(prisma, salesOrders, failingLedger);
+    await expect(failingFranchise.transition(franchiseOrderId, "receive", userId)).rejects.toThrow("forced receipt failure");
+    expect((await prisma.franchiseStore.findUniqueOrThrow({ where: { id: legacyStore.id } })).inventoryLocationId).toBeNull();
+    expect((await prisma.franchiseSupplyOrder.findUniqueOrThrow({ where: { id: franchiseOrderId } })).status).toBe("DISPATCHED");
+    expect((await prisma.salesOrder.findUniqueOrThrow({ where: { id: approved.salesOrderId } })).status).toBe("DISPATCHED");
+    expect(await prisma.inventoryMovement.count({ where: { referenceType: "FRANCHISE_RECEIPT", referenceId: franchiseOrderId } })).toBe(0);
+
+    await franchise.transition(franchiseOrderId, "receive", userId);
+    expect((await prisma.franchiseSupplyOrder.findUniqueOrThrow({ where: { id: franchiseOrderId } })).status).toBe("RECEIVED");
+    expect((await prisma.franchiseStore.findUniqueOrThrow({ where: { id: legacyStore.id } })).inventoryLocationId).toBeTruthy();
   });
 
   it("allocates public online and B2B orders through the shared allocator", async () => {

@@ -1,13 +1,19 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma, StockState } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 import { SalesOrderService } from '../sales-orders/sales-order.service';
+import { InventoryLedgerService } from '../inventory/services/inventory-ledger.service';
 import { AppError } from '../common/errors/app-error';
 import { ErrorCodes } from '../common/errors/error-codes';
 import { CreateFranchisePartnerDto, CreateFranchiseStoreDto, CreateFranchiseSupplyOrderDto } from './franchise.dto';
 
 @Injectable()
 export class FranchiseService {
-  constructor(private readonly prisma: PrismaService, private readonly salesOrders: SalesOrderService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly salesOrders: SalesOrderService,
+    private readonly inventoryLedger: InventoryLedgerService,
+  ) {}
 
   async overview() {
     const [partners, stores, orders, totals] = await Promise.all([
@@ -31,19 +37,76 @@ export class FranchiseService {
     return rows[0];
   }
 
+  async listAssignableBranches(userId: string) {
+    const assignments = await this.prisma.userRole.findMany({
+      where: { userId }, select: { branchId: true, warehouseId: true },
+    });
+    const isGlobalAdmin = assignments.some((assignment) => !assignment.branchId && !assignment.warehouseId);
+    const branchIds = new Set(assignments.flatMap((assignment) => assignment.branchId ? [assignment.branchId] : []));
+    if (!isGlobalAdmin) {
+      const warehouseIds = assignments.flatMap((assignment) => assignment.warehouseId ? [assignment.warehouseId] : []);
+      if (warehouseIds.length) {
+        const warehouses = await this.prisma.warehouse.findMany({
+          where: { id: { in: warehouseIds } }, select: { branchId: true },
+        });
+        warehouses.forEach((warehouse) => branchIds.add(warehouse.branchId));
+      }
+    }
+    return this.prisma.branch.findMany({
+      where: {
+        status: 'ACTIVE', deletedAt: null,
+        ...(isGlobalAdmin ? {} : { id: { in: [...branchIds] } }),
+      },
+      select: { id: true, code: true, name: true, status: true },
+      orderBy: { name: 'asc' },
+    });
+  }
+
   listStores() {
     return this.prisma.$queryRaw`
-      SELECT s.id, s."partnerId", s.name, s.address, s.status, s."createdAt", p.name AS "partnerName", p.phone AS "partnerPhone"
-      FROM "FranchiseStore" s JOIN "FranchisePartner" p ON p.id = s."partnerId" ORDER BY p.name, s.name`;
+      SELECT s.id, s."partnerId", s."branchId", s."inventoryLocationId", s.name, s.address, s.status, s."createdAt",
+        p.name AS "partnerName", p.phone AS "partnerPhone", b.code AS "branchCode", b.name AS "branchName"
+      FROM "FranchiseStore" s JOIN "FranchisePartner" p ON p.id = s."partnerId"
+      LEFT JOIN "Branch" b ON b.id = s."branchId" ORDER BY p.name, s.name`;
   }
 
   async createStore(dto: CreateFranchiseStoreDto) {
+    const [branch, partner] = await Promise.all([
+      this.prisma.branch.findFirst({ where: { id: dto.branchId, status: 'ACTIVE', deletedAt: null }, select: { id: true } }),
+      this.prisma.franchisePartner.findFirst({ where: { id: dto.partnerId, status: 'ACTIVE' }, select: { id: true } }),
+    ]);
+    if (!branch) throw new AppError(ErrorCodes.VALIDATION_ERROR, 'A valid active branch is required for a franchise store.', 422);
+    if (!partner) throw new AppError(ErrorCodes.NOT_FOUND, 'Active franchise partner not found.', 404);
     const rows = await this.prisma.$queryRaw<Array<Record<string, unknown>>>`
-      INSERT INTO "FranchiseStore" (id, "partnerId", name, address, status, "updatedAt")
-      SELECT gen_random_uuid()::text, p.id, ${dto.name.trim()}, ${dto.address.trim()}, 'ACTIVE', NOW()
-      FROM "FranchisePartner" p WHERE p.id = ${dto.partnerId} AND p.status = 'ACTIVE'
-      RETURNING id, "partnerId", name, address, status, "createdAt"`;
-    if (!rows[0]) throw new AppError(ErrorCodes.NOT_FOUND, 'Active franchise partner not found.', 404);
+      INSERT INTO "FranchiseStore" (id, "partnerId", "branchId", name, address, status, "updatedAt")
+      VALUES (gen_random_uuid()::text, ${dto.partnerId}, ${dto.branchId}, ${dto.name.trim()}, ${dto.address.trim()}, 'ACTIVE', NOW())
+      RETURNING id, "partnerId", "branchId", "inventoryLocationId", name, address, status, "createdAt"`;
+    return rows[0];
+  }
+
+  async assignStoreBranch(id: string, branchId: string) {
+    const branch = await this.prisma.branch.findFirst({ where: { id: branchId, status: 'ACTIVE', deletedAt: null }, select: { id: true } });
+    if (!branch) throw new AppError(ErrorCodes.VALIDATION_ERROR, 'A valid active branch is required for a franchise store.', 422);
+    await this.prisma.$transaction(async (tx) => {
+      const stores = await tx.$queryRaw<Array<{ id: string; branchId: string | null; inventoryLocationId: string | null }>>`
+        SELECT id, "branchId", "inventoryLocationId" FROM "FranchiseStore" WHERE id = ${id} FOR UPDATE`;
+      const store = stores[0];
+      if (!store) throw new AppError(ErrorCodes.NOT_FOUND, 'Franchise store not found.', 404);
+      if (store.inventoryLocationId && store.branchId !== branchId) {
+        throw new AppError(ErrorCodes.CONFLICT, 'A franchise store branch cannot change after its inventory location has been created.', 409);
+      }
+      await tx.franchiseStore.update({ where: { id }, data: { branchId } });
+    });
+    return this.getStore(id);
+  }
+
+  private async getStore(id: string) {
+    const rows = await this.prisma.$queryRaw<Array<Record<string, unknown>>>`
+      SELECT s.id, s."partnerId", s."branchId", s."inventoryLocationId", s.name, s.address, s.status, s."createdAt",
+        p.name AS "partnerName", p.phone AS "partnerPhone", b.code AS "branchCode", b.name AS "branchName"
+      FROM "FranchiseStore" s JOIN "FranchisePartner" p ON p.id = s."partnerId"
+      LEFT JOIN "Branch" b ON b.id = s."branchId" WHERE s.id = ${id}`;
+    if (!rows[0]) throw new AppError(ErrorCodes.NOT_FOUND, 'Franchise store not found.', 404);
     return rows[0];
   }
 
@@ -105,6 +168,7 @@ export class FranchiseService {
   }
 
   async transition(id: string, action: 'approve' | 'pick' | 'pack' | 'dispatch' | 'receive', actorId: string) {
+    if (action === 'receive') return this.receive(id, actorId);
     const order = await this.getOrder(id);
     if (action === 'approve') {
       if (order.status !== 'REQUESTED') return order;
@@ -130,7 +194,6 @@ export class FranchiseService {
       pick: { from: 'APPROVED', to: 'PICKING', sales: 'PICKING' },
       pack: { from: 'PICKING', to: 'PACKED', sales: 'PACKED' },
       dispatch: { from: 'PACKED', to: 'DISPATCHED', sales: 'DISPATCHED' },
-      receive: { from: 'DISPATCHED', to: 'RECEIVED', sales: 'DELIVERED' },
     } as const;
     const step = lifecycle[action];
     if (!step) throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Unsupported franchise supply action.', 422);
@@ -144,6 +207,154 @@ export class FranchiseService {
       if (changed[0]) await this.addEvent(tx, id, step.from, step.to, actorId, null);
     });
     return this.getOrder(id);
+  }
+
+  private async receive(id: string, actorId: string) {
+    await this.prisma.$transaction(async (tx) => {
+      const lockedOrders = await tx.$queryRaw<Array<{
+        id: string;
+        status: string;
+        storeId: string;
+        salesOrderId: string | null;
+      }>>`
+        SELECT id, status::text AS status, "storeId", "salesOrderId"
+        FROM "FranchiseSupplyOrder" WHERE id = ${id} FOR UPDATE`;
+      const order = lockedOrders[0];
+      if (!order) throw new AppError(ErrorCodes.NOT_FOUND, 'Franchise supply order not found.', 404);
+      if (order.status === 'RECEIVED') return;
+      if (order.status !== 'DISPATCHED' || !order.salesOrderId) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, `Cannot receive a supply order in ${order.status}.`, 422);
+      }
+
+      const lockedStores = await tx.$queryRaw<Array<{
+        id: string;
+        branchId: string | null;
+        inventoryLocationId: string | null;
+        name: string;
+      }>>`
+        SELECT id, "branchId", "inventoryLocationId", name
+        FROM "FranchiseStore" WHERE id = ${order.storeId} FOR UPDATE`;
+      const store = lockedStores[0];
+      if (!store) throw new AppError(ErrorCodes.NOT_FOUND, 'Franchise store not found.', 404);
+      if (!store.branchId) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, 'FRANCHISE_BRANCH_REQUIRED: assign a branch to this franchise store before receiving inventory.', 422);
+      }
+
+      const branch = await tx.branch.findFirst({
+        where: { id: store.branchId, status: 'ACTIVE', deletedAt: null },
+        select: { id: true },
+      });
+      if (!branch) throw new AppError(ErrorCodes.VALIDATION_ERROR, 'The franchise store must belong to a valid active branch before receiving inventory.', 422);
+
+      const location = await this.ensureInventoryLocation(tx, store);
+      const salesOrders = await tx.$queryRaw<Array<{ id: string; status: string; source: string; branchId: string | null }>>`
+        SELECT id, status::text AS status, source::text AS source, "branchId"
+        FROM "SalesOrder" WHERE id = ${order.salesOrderId} FOR UPDATE`;
+      const salesOrder = salesOrders[0];
+      if (!salesOrder || salesOrder.source !== 'FRANCHISE' || !['DISPATCHED', 'DELIVERED'].includes(salesOrder.status)) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, 'The linked franchise sales order must be dispatched before receipt.', 422);
+      }
+
+      const orderLines = await tx.salesOrderItem.findMany({
+        where: { salesOrderId: order.salesOrderId },
+        select: { id: true, productId: true, unitId: true, quantity: true, baseQuantity: true },
+      });
+      const allocations = await tx.stockReservationItem.findMany({
+        where: {
+          reservation: { salesOrderId: order.salesOrderId, status: 'CONSUMED' },
+        },
+        include: { product: { select: { isBatchTracked: true } } },
+        orderBy: [{ salesOrderItemId: 'asc' }, { batchId: 'asc' }, { id: 'asc' }],
+      });
+      if (orderLines.length === 0 || allocations.length === 0) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, 'The dispatched franchise order has no persisted stock allocations to receive.', 422);
+      }
+
+      const allocatedByLine = new Map<string, { quantity: number; baseQuantity: number }>();
+      for (const allocation of allocations) {
+        const line = orderLines.find((candidate) => candidate.id === allocation.salesOrderItemId);
+        if (!line || line.productId !== allocation.productId || line.unitId !== allocation.unitId) {
+          throw new AppError(ErrorCodes.CONFLICT, 'Franchise receipt allocation does not match its sales-order line.', 409);
+        }
+        if (allocation.product.isBatchTracked && !allocation.batchId) {
+          throw new AppError(ErrorCodes.CONFLICT, 'A batch-tracked franchise allocation has no batch.', 409);
+        }
+        const prior = allocatedByLine.get(line.id) ?? { quantity: 0, baseQuantity: 0 };
+        prior.quantity += Number(allocation.quantity);
+        prior.baseQuantity += Number(allocation.baseQuantity);
+        allocatedByLine.set(line.id, prior);
+      }
+      const quantityMatches = (a: number, b: number) => Math.abs(a - b) < 0.0000001;
+      if (orderLines.some((line) => {
+        const allocated = allocatedByLine.get(line.id);
+        return !allocated ||
+          !quantityMatches(allocated.quantity, Number(line.quantity)) ||
+          !quantityMatches(allocated.baseQuantity, Number(line.baseQuantity));
+      })) {
+        throw new AppError(ErrorCodes.CONFLICT, 'Persisted franchise allocations do not equal the dispatched order quantities.', 409);
+      }
+
+      await this.inventoryLedger.postEvent({
+        eventType: 'FRANCHISE_RECEIPT',
+        branchId: store.branchId,
+        referenceType: 'FRANCHISE_RECEIPT',
+        referenceId: id,
+        createdById: actorId,
+        idempotencyKey: `franchise-receipt-${id}`,
+        metadata: { franchiseStoreId: store.id, salesOrderId: order.salesOrderId, inventoryLocationId: location.id },
+        movements: allocations.map((allocation) => ({
+          locationId: location.id,
+          productId: allocation.productId,
+          batchId: allocation.batchId ?? undefined,
+          unitId: allocation.unitId,
+          stockState: StockState.AVAILABLE,
+          quantityDelta: Number(allocation.quantity),
+          baseQuantityDelta: Number(allocation.baseQuantity),
+          movementType: 'STOCK_IN' as const,
+          reasonCode: 'FRANCHISE_SUPPLY_RECEIVED',
+        })),
+      }, tx);
+
+      if (salesOrder.status === 'DISPATCHED') {
+        await tx.salesOrder.update({ where: { id: order.salesOrderId }, data: { status: 'DELIVERED' } });
+      }
+      const changed = await tx.$queryRaw<Array<{ status: string }>>`
+        UPDATE "FranchiseSupplyOrder" SET status = 'RECEIVED', "updatedAt" = NOW()
+        WHERE id = ${id} AND status = 'DISPATCHED' RETURNING status`;
+      if (!changed[0]) throw new AppError(ErrorCodes.CONFLICT, 'Franchise order status changed during receipt.', 409);
+      await this.addEvent(tx, id, 'DISPATCHED', 'RECEIVED', actorId, null);
+    });
+    return this.getOrder(id);
+  }
+
+  private async ensureInventoryLocation(
+    tx: Prisma.TransactionClient,
+    store: { id: string; branchId: string | null; inventoryLocationId: string | null; name: string },
+  ) {
+    if (!store.branchId) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'FRANCHISE_BRANCH_REQUIRED: assign a branch to this franchise store before receiving inventory.', 422);
+    }
+    if (store.inventoryLocationId) {
+      const location = await tx.inventoryLocation.findUnique({ where: { id: store.inventoryLocationId } });
+      if (!location || location.type !== 'FRANCHISE_STORE' || location.branchId !== store.branchId || location.warehouseId !== null) {
+        throw new AppError(ErrorCodes.CONFLICT, 'The linked franchise inventory location is invalid or belongs to another branch.', 409);
+      }
+      if (location.status !== 'ACTIVE') {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, 'The franchise inventory location is inactive.', 422);
+      }
+      return location;
+    }
+
+    const location = await tx.inventoryLocation.create({
+      data: {
+        branchId: store.branchId,
+        code: `FR-${store.id}`,
+        name: `Franchise - ${store.name}`,
+        type: 'FRANCHISE_STORE',
+      },
+    });
+    await tx.franchiseStore.update({ where: { id: store.id }, data: { inventoryLocationId: location.id } });
+    return location;
   }
 
   private addEvent(tx: any, id: string, fromStatus: string | null, toStatus: string, actorId: string, notes: string | null) {

@@ -54,6 +54,7 @@ enum InventoryEventType {
   REVERSAL_EVENT
   STOCK_TRANSFER
   PROCUREMENT_RECEIPT
+  FRANCHISE_RECEIPT
 }
 
 enum InventoryEventStatus {
@@ -79,6 +80,7 @@ enum ReferenceType {
   GOODS_RECEIPT
   STOCK_ADJUSTMENT
   STOCK_TRANSFER
+  FRANCHISE_RECEIPT
   INVOICE
   PAYMENT
   RETAILER
@@ -533,6 +535,7 @@ model Branch {
   creditApprovals           CreditApproval[]
   purchaseOrders            PurchaseOrder[]
   goodsReceipts             GoodsReceipt[]
+  franchiseStores           FranchiseStore[]
 
   @@index([status])
 }
@@ -587,6 +590,7 @@ model InventoryLocation {
   damageReports             DamageReport[]
   expiryEvents              ExpiryEvent[]
   StockReservation          StockReservation[]
+  franchiseStore            FranchiseStore?
 
   @@unique([branchId, code])
   @@index([branchId])
@@ -1468,17 +1472,22 @@ model FranchisePartner {
 }
 
 model FranchiseStore {
-  id        String           @id @default(uuid())
-  partnerId String
-  name      String
-  address   String
-  status    MasterDataStatus @default(ACTIVE)
-  createdAt DateTime         @default(now())
-  updatedAt DateTime         @updatedAt
-  partner   FranchisePartner @relation(fields: [partnerId], references: [id], onDelete: Restrict)
-  orders    FranchiseSupplyOrder[]
+  id                  String                 @id @default(uuid())
+  partnerId           String
+  branchId            String?
+  inventoryLocationId String?                @unique
+  name                String
+  address             String
+  status              MasterDataStatus       @default(ACTIVE)
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+  partner             FranchisePartner       @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  branch              Branch?                @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  inventoryLocation   InventoryLocation?     @relation(fields: [inventoryLocationId], references: [id], onDelete: Restrict)
+  orders              FranchiseSupplyOrder[]
 
   @@index([partnerId, status])
+  @@index([branchId])
 }
 
 model FranchiseSupplyOrder {

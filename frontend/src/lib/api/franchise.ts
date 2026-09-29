@@ -2,7 +2,11 @@ import { api } from './client';
 
 export type FranchiseStatus = 'REQUESTED' | 'APPROVED' | 'PICKING' | 'PACKED' | 'DISPATCHED' | 'RECEIVED' | 'CANCELLED';
 export type FranchisePartner = { id: string; name: string; phone: string; email?: string; status: string };
-export type FranchiseStore = { id: string; partnerId: string; name: string; address: string; status: string; partnerName?: string; partnerPhone?: string };
+export type FranchiseStore = {
+  id: string; partnerId: string; branchId?: string | null; inventoryLocationId?: string | null;
+  name: string; address: string; status: string; partnerName?: string; partnerPhone?: string;
+  branchCode?: string | null; branchName?: string | null;
+};
 export type FranchiseSupplyOrder = {
   id: string; orderNumber: string; storeId: string; salesOrderId?: string | null; status: FranchiseStatus;
   totalAmount?: number | string | null; createdAt: string; storeName: string; storeAddress: string;
@@ -13,10 +17,12 @@ export type FranchiseSupplyOrder = {
 
 export const franchiseApi = {
   overview: async () => (await api.get<Record<string, unknown>>('/franchise/overview')).data,
+  listBranches: async () => (await api.get<Array<{ id: string; code: string; name: string; status: string }>>('/franchise/branches')).data,
   listPartners: async () => (await api.get<FranchisePartner[]>('/franchise/partners')).data,
   createPartner: async (data: { name: string; phone: string; email?: string }) => (await api.post<FranchisePartner>('/franchise/partners', data)).data,
   listStores: async () => (await api.get<FranchiseStore[]>('/franchise/stores')).data,
-  createStore: async (data: { partnerId: string; name: string; address: string }) => (await api.post<FranchiseStore>('/franchise/stores', data)).data,
+  createStore: async (data: { partnerId: string; branchId: string; name: string; address: string }) => (await api.post<FranchiseStore>('/franchise/stores', data)).data,
+  assignStoreBranch: async (id: string, branchId: string) => (await api.patch<FranchiseStore>(`/franchise/stores/${id}/branch`, { branchId })).data,
   listOrders: async () => (await api.get<FranchiseSupplyOrder[]>('/franchise/supply-orders')).data,
   getOrder: async (id: string) => (await api.get<FranchiseSupplyOrder>(`/franchise/supply-orders/${id}`)).data,
   createOrder: async (data: { storeId: string; items: Array<{ productId: string; unitId?: string; quantity: number }> }) => (await api.post<FranchiseSupplyOrder>('/franchise/supply-orders', data)).data,

@@ -13,7 +13,9 @@ export type ScopeType =
 	| 'invoice'
 	| 'payment'
 	| 'purchase-order'
-	| 'goods-receipt';
+	| 'goods-receipt'
+	| 'franchise-store'
+	| 'franchise-order';
 
 /**
  * Marks an endpoint as requiring a specific location scope.

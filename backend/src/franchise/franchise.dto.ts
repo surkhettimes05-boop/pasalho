@@ -9,8 +9,13 @@ export class CreateFranchisePartnerDto {
 
 export class CreateFranchiseStoreDto {
   @IsUUID() partnerId: string;
+  @IsUUID() branchId: string;
   @IsString() name: string;
   @IsString() address: string;
+}
+
+export class AssignFranchiseStoreBranchDto {
+  @IsUUID() branchId: string;
 }
 
 export class FranchiseSupplyItemDto {
