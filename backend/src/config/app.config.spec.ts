@@ -5,6 +5,11 @@ describe('appConfigSchema store sync production settings', () => {
     NODE_ENV: 'production',
     DATABASE_URL: 'postgresql://user:pass@localhost:5432/app',
     JWT_SECRET: 'a-production-jwt-secret-long-enough',
+    CUSTOMER_JWT_SECRET: 'a-separate-customer-jwt-secret-long-enough',
+    STOREFRONT_SYSTEM_USER_ID: '99999999-9999-4999-a999-999999999999',
+    OTP_PROVIDER: 'sms',
+    OTP_SMS_WEBHOOK_URL: 'https://sms.example.com/send',
+    OTP_SMS_WEBHOOK_TOKEN: 'sms-provider-token-long-enough',
   };
 
   it('requires the canonical receiver URL in production', () => {
@@ -77,6 +82,30 @@ describe('appConfigSchema store sync production settings', () => {
     });
 
     expect(result.error).toBeUndefined();
+  });
+
+  it('rejects the console OTP provider in production', () => {
+    const result = appConfigSchema.validate({
+      ...base,
+      OTP_PROVIDER: 'console',
+      STORE_SYNC_WEBHOOK_URL: 'https://ceo.example.com/api/sync/inbound-transfers',
+      STORE_SYNC_WEBHOOK_SECRET: 's'.repeat(40),
+      CORS_ORIGIN: 'https://pasalo.example.com',
+    });
+
+    expect(result.error?.message).toContain('OTP_PROVIDER');
+  });
+
+  it('requires a separate customer JWT secret in production', () => {
+    const { CUSTOMER_JWT_SECRET: _removed, ...withoutCustomerSecret } = base;
+    const result = appConfigSchema.validate({
+      ...withoutCustomerSecret,
+      STORE_SYNC_WEBHOOK_URL: 'https://ceo.example.com/api/sync/inbound-transfers',
+      STORE_SYNC_WEBHOOK_SECRET: 's'.repeat(40),
+      CORS_ORIGIN: 'https://pasalo.example.com',
+    });
+
+    expect(result.error?.message).toContain('CUSTOMER_JWT_SECRET');
   });
 
   it('does not require webhook settings in development or test', () => {

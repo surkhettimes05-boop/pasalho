@@ -48,6 +48,15 @@ services:
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:-change-this-to-a-real-secret-in-production}
       JWT_EXPIRATION: ${JWT_EXPIRATION:-24h}
+      CUSTOMER_JWT_SECRET: ${CUSTOMER_JWT_SECRET:-change-this-customer-jwt-secret-in-production-123456}
+      CUSTOMER_JWT_TTL_SECONDS: ${CUSTOMER_JWT_TTL_SECONDS:-900}
+      CUSTOMER_REFRESH_TOKEN_DAYS: ${CUSTOMER_REFRESH_TOKEN_DAYS:-30}
+      OTP_PROVIDER: ${OTP_PROVIDER:-sms}
+      OTP_SMS_WEBHOOK_URL: ${OTP_SMS_WEBHOOK_URL:-https://example.invalid/otp}
+      OTP_SMS_WEBHOOK_TOKEN: ${OTP_SMS_WEBHOOK_TOKEN:-dummy-otp-provider-token-for-compose}
+      STOREFRONT_SYSTEM_USER_ID: ${STOREFRONT_SYSTEM_USER_ID:-99999999-9999-4999-a999-999999999999}
+      STORE_SYNC_WEBHOOK_URL: ${STORE_SYNC_WEBHOOK_URL:-https://example.invalid/api/sync/inbound-transfers}
+      STORE_SYNC_WEBHOOK_SECRET: ${STORE_SYNC_WEBHOOK_SECRET:-dummy-store-sync-secret-for-compose-123456}
       NODE_ENV: ${NODE_ENV:-production}
       PORT: 3000
       API_PREFIX: api
@@ -64,7 +73,7 @@ services:
       - pasalo-network
     restart: unless-stopped
     command: >
-      sh -c "npx prisma migrate deploy && node dist/main.js"
+      sh -c "node node_modules/prisma/build/index.js migrate deploy && node dist/main.js"
 
   # Next.js Frontend
   frontend:

@@ -1,6 +1,8 @@
 # Build stage
 FROM node:18-alpine AS builder
 
+RUN apk add --no-cache openssl
+
 WORKDIR /app
 
 # Copy package files
@@ -21,6 +23,8 @@ RUN npm run build
 # Production stage
 FROM node:18-alpine
 
+RUN apk add --no-cache openssl
+
 WORKDIR /app
 
 # Copy package files
@@ -38,6 +42,7 @@ COPY prisma ./prisma
 # Copy generated Prisma client
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
 
 # Expose port
 EXPOSE 3000
