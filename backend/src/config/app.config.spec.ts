@@ -5,6 +5,11 @@ describe('appConfigSchema store sync production settings', () => {
     NODE_ENV: 'production',
     DATABASE_URL: 'postgresql://user:pass@localhost:5432/app',
     JWT_SECRET: 'a-production-jwt-secret-long-enough',
+    CUSTOMER_JWT_SECRET: 'a-separate-customer-jwt-secret-long-enough',
+    STOREFRONT_SYSTEM_USER_ID: '99999999-9999-4999-a999-999999999999',
+    OTP_PROVIDER: 'sms',
+    OTP_SMS_WEBHOOK_URL: 'https://sms.example.com/send',
+    OTP_SMS_WEBHOOK_TOKEN: 'sms-provider-token-long-enough',
   };
 
   it('requires the canonical receiver URL in production', () => {

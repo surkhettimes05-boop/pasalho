@@ -23,6 +23,7 @@ import { DeliveryModule } from './deliveries/delivery.module';
 import { NotificationModule } from './notifications/notification.module';
 import { RetailerPortalModule } from './retailer-portal/retailer-portal.module';
 import { appConfigSchema } from './config/app.config';
+import { CommerceModule } from './commerce/commerce.module';
 
 @Module({
   imports: [

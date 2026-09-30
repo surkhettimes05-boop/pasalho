@@ -34,6 +34,35 @@ export const appConfigSchema = Joi.object({
   }),
   JWT_EXPIRES_IN: Joi.string().default('15m'),
   JWT_REFRESH_EXPIRES_IN: Joi.string().default('7d'),
+  CUSTOMER_JWT_SECRET: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().min(32).required(),
+    otherwise: Joi.string().min(16).optional(),
+  }),
+  CUSTOMER_JWT_TTL_SECONDS: Joi.number().integer().min(60).max(86400).default(900),
+  CUSTOMER_REFRESH_TOKEN_DAYS: Joi.number().integer().min(1).max(90).default(30),
+  OTP_PROVIDER: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().valid('sms').required(),
+    otherwise: Joi.string().valid('console', 'sms').default('console'),
+  }),
+  OTP_SMS_WEBHOOK_URL: Joi.when('OTP_PROVIDER', {
+    is: 'sms',
+    then: Joi.string().uri({ scheme: ['http', 'https'] }).required(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
+  OTP_SMS_WEBHOOK_TOKEN: Joi.when('OTP_PROVIDER', {
+    is: 'sms',
+    then: Joi.string().min(16).required(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
+  OTP_TTL_SECONDS: Joi.number().integer().min(60).max(900).default(300),
+  OTP_MAX_ATTEMPTS: Joi.number().integer().min(1).max(10).default(5),
+  STOREFRONT_SYSTEM_USER_ID: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().guid({ version: ['uuidv4'] }).required(),
+    otherwise: Joi.string().guid({ version: ['uuidv4'] }).allow('').optional(),
+  }),
   CORS_ORIGIN: Joi.when('NODE_ENV', {
     is: 'production',
     then: Joi.string().required(),
