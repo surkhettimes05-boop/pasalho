@@ -64,7 +64,7 @@ services:
       - pasalo-network
     restart: unless-stopped
     command: >
-      sh -c "npx prisma migrate deploy && node dist/main.js"
+      sh -c "node node_modules/prisma/build/index.js migrate deploy && node dist/main.js"
 
   # Next.js Frontend
   frontend:
