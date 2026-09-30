@@ -30,6 +30,11 @@ enum CustomerAddressLabel {
   OTHER
 }
 
+enum ServiceZoneStatus {
+  ACTIVE
+  INACTIVE
+}
+
 enum RetailerStatus {
   ACTIVE
   ON_HOLD
@@ -632,6 +637,8 @@ model InventoryLocation {
   name        String
   type        String           @default("WAREHOUSE")
   status      MasterDataStatus @default(ACTIVE)
+  latitude    Decimal?         @db.Decimal(10, 7)
+  longitude   Decimal?         @db.Decimal(10, 7)
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
 
@@ -647,10 +654,51 @@ model InventoryLocation {
   damageReports             DamageReport[]
   expiryEvents              ExpiryEvent[]
   StockReservation          StockReservation[]
+  serviceZones              ServiceZoneFulfillmentLocation[]
 
   @@unique([branchId, code])
   @@index([branchId])
   @@index([status])
+}
+
+
+model ServiceZone {
+  id                    String            @id @default(uuid())
+  code                  String            @unique
+  name                  String
+  status                ServiceZoneStatus @default(ACTIVE)
+  priority              Int               @default(100)
+  polygon               Json?
+  centerLat             Decimal?          @db.Decimal(10, 7)
+  centerLng             Decimal?          @db.Decimal(10, 7)
+  radiusMeters          Int?
+  minOrder              Decimal           @default(0) @db.Decimal(18, 4)
+  deliveryFee           Decimal           @default(0) @db.Decimal(18, 4)
+  freeDeliveryThreshold Decimal?          @db.Decimal(18, 4)
+  etaMinMinutes         Int               @default(30)
+  etaMaxMinutes         Int               @default(60)
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  locations ServiceZoneFulfillmentLocation[]
+
+  @@index([status, priority])
+}
+
+model ServiceZoneFulfillmentLocation {
+  id                  String  @id @default(uuid())
+  serviceZoneId       String
+  inventoryLocationId String
+  priority            Int     @default(100)
+  isEnabled           Boolean @default(true)
+  maxActiveOrders     Int?
+
+  serviceZone       ServiceZone       @relation(fields: [serviceZoneId], references: [id], onDelete: Cascade)
+  inventoryLocation InventoryLocation @relation(fields: [inventoryLocationId], references: [id], onDelete: Restrict)
+
+  @@unique([serviceZoneId, inventoryLocationId])
+  @@index([inventoryLocationId])
+  @@index([serviceZoneId, isEnabled, priority])
 }
 
 model Category {
