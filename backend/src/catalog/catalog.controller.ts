@@ -36,7 +36,7 @@ import { PermissionsGuard } from '../auth/permissions.guard';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
-import { cloudinaryStorage } from '../config/cloudinary.config';
+import { uploadImageBuffer } from '../config/cloudinary.config';
 
 @ApiTags('catalog')
 @ApiBearerAuth()
