@@ -496,7 +496,6 @@ model CustomerSession {
   revokedAt        DateTime?
 
   customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  orders   SalesOrder[]
 
   @@index([customerId])
   @@index([refreshExpiresAt])
@@ -538,6 +537,7 @@ model CustomerAddress {
   deletedAt     DateTime?
 
   customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  orders   SalesOrder[]
 
   @@index([customerId])
   @@index([customerId, isDefault])
