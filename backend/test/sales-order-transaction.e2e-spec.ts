@@ -10,6 +10,7 @@ import { CreateSalesOrderDto } from "../src/sales-orders/dto/create-sales-order.
 import { RetailerNotificationService } from "../src/retailer-portal/retailer-notification.service";
 import { RetailerOrderService } from "../src/retailer-portal/retailer-order.service";
 import { FranchiseService } from "../src/franchise/franchise.service";
+import { PaymentService } from "../src/sales/payment.service";
 
 describe("Sales-order transaction (real PostgreSQL)", () => {
   let prisma: PrismaService;
@@ -1067,6 +1068,168 @@ describe("Sales-order transaction (real PostgreSQL)", () => {
     const b2bLines = await prisma.stockReservationItem.findMany({ where: { reservation: { salesOrderId: b2b.id } } });
     expect(b2bLines.reduce((sum, line) => sum + Number(line.baseQuantity), 0)).toBe(5);
     expect(b2bLines.every((line) => Boolean(line.batchId))).toBe(true);
+  });
+
+  it("proves B2B multi-batch FEFO allocation through invoice, dispatch, delivery, and payment", async () => {
+    await seedBatchStock([
+      { name: "p1-3a-batch-a", quantity: 3, expiryDate: new Date("2026-11-01T00:00:00Z") },
+      { name: "p1-3a-batch-b", quantity: 20, expiryDate: new Date("2027-01-01T00:00:00Z") },
+    ]);
+    const batchRecords = await prisma.batch.findMany({
+      where: { productId, batchNumber: { startsWith: `${prefix}-p1-3a-` } },
+      orderBy: { expiryDate: "asc" },
+    });
+    expect(batchRecords.map((batch) => batch.batchNumber)).toEqual([
+      `${prefix}-p1-3a-batch-a`,
+      `${prefix}-p1-3a-batch-b`,
+    ]);
+    const [batchA, batchB] = batchRecords;
+    const idempotencyKey = `${prefix}-p1-3a-b2b-order`;
+
+    // No batchId is supplied: the B2B caller relies on the shared allocator.
+    const order = (await retailerOrders.placeOrder(
+      retailerId,
+      [{ productId, unitId, quantity: 5 }],
+      "P1-3A FEFO acceptance",
+      idempotencyKey,
+    )) as any;
+    expect(order.source).toBe("DNP");
+    expect(order.retailerId).toBe(retailerId);
+    expect(order.branchId).toBe(branchId);
+    expect(Number(order.items[0].unitPrice)).toBe(10);
+    expect(Number(order.grandTotal)).toBe(50);
+
+    const reservation = await prisma.stockReservation.findFirstOrThrow({
+      where: { salesOrderId: order.id },
+      include: { items: true },
+    });
+    const allocationByBatch = new Map(
+      reservation.items.map((item) => [item.batchId, Number(item.baseQuantity)]),
+    );
+    expect(reservation.status).toBe("ACTIVE");
+    expect(allocationByBatch).toEqual(new Map([[batchA.id, 3], [batchB.id, 2]]));
+
+    const physicalByBatch = async () => {
+      const rows = await prisma.inventorySnapshot.findMany({
+        where: { locationId, productId, batchId: { in: [batchA.id, batchB.id] } },
+        select: { batchId: true, stockState: true, baseQuantity: true },
+      });
+      return new Map([batchA.id, batchB.id].map((batchId) => [
+        batchId,
+        rows
+          .filter((row) => row.batchId === batchId && ["AVAILABLE", "RESERVED"].includes(row.stockState))
+          .reduce((sum, row) => sum + Number(row.baseQuantity), 0),
+      ]));
+    };
+    const reservedByBatch = await prisma.inventorySnapshot.findMany({
+      where: { locationId, productId, batchId: { in: [batchA.id, batchB.id] }, stockState: "RESERVED" },
+      select: { batchId: true, baseQuantity: true },
+    });
+    expect(new Map(reservedByBatch.map((row) => [row.batchId, Number(row.baseQuantity)]))).toEqual(
+      new Map([[batchA.id, 3], [batchB.id, 2]]),
+    );
+    expect([...((await physicalByBatch()).values())].reduce((sum, quantity) => sum + quantity, 0)).toBe(23);
+
+    // Picking and packing are status-only transitions; persisted batch allocation must remain unchanged.
+    await salesOrders.updateStatus(order.id, "PICKING", userId);
+    await salesOrders.updateStatus(order.id, "PACKED", userId);
+    const pickedPackedAllocations = await prisma.stockReservationItem.findMany({
+      where: { reservation: { salesOrderId: order.id } },
+    });
+    expect(new Map(pickedPackedAllocations.map((item) => [item.batchId, Number(item.baseQuantity)]))).toEqual(
+      new Map([[batchA.id, 3], [batchB.id, 2]]),
+    );
+
+    const invoiced = (await salesOrders.convertToInvoice(
+      order.id,
+      { warehouseId, sourceLocationId: locationId },
+      userId,
+    )) as any;
+    const invoice = await prisma.invoice.findUniqueOrThrow({
+      where: { id: invoiced.invoiceId },
+      include: { items: true },
+    });
+    expect(await prisma.invoice.count({ where: { salesOrder: { id: order.id } } })).toBe(1);
+    expect(invoice.retailerId).toBe(retailerId);
+    expect(invoice.items).toHaveLength(1);
+    expect(Number(invoice.items[0].quantity)).toBe(5);
+    expect(Number(invoice.items[0].unitPrice)).toBe(10);
+    expect(Number(invoice.subtotal)).toBe(50);
+    expect(Number(invoice.grandTotal)).toBe(50);
+    await expect(
+      salesOrders.convertToInvoice(order.id, { warehouseId, sourceLocationId: locationId }, userId),
+    ).rejects.toThrow();
+    expect(await prisma.invoice.count({ where: { salesOrder: { id: order.id } } })).toBe(1);
+
+    const movementsBeforePost = await movementCount();
+    await invoiceService.post(invoice.id, userId);
+    await invoiceService.post(invoice.id, userId);
+    expect(await movementCount()).toBe(movementsBeforePost + 2);
+    const consumption = await prisma.inventoryMovement.findMany({
+      where: {
+        referenceType: "INVOICE",
+        referenceId: invoice.id,
+        movementType: "SALE_DEDUCTION",
+      },
+      select: { batchId: true, stockState: true, baseQuantityDelta: true },
+    });
+    expect(consumption).toHaveLength(2);
+    expect(consumption.every((movement) => movement.stockState === "RESERVED")).toBe(true);
+    expect(new Map(consumption.map((movement) => [movement.batchId, Number(movement.baseQuantityDelta)]))).toEqual(
+      new Map([[batchA.id, -3], [batchB.id, -2]]),
+    );
+    expect(new Map(reservation.items.map((item) => [item.batchId, Number(item.baseQuantity)]))).toEqual(
+      new Map([[batchA.id, 3], [batchB.id, 2]]),
+    );
+    expect((await prisma.stockReservation.findUniqueOrThrow({ where: { id: reservation.id } })).status).toBe("CONSUMED");
+    expect(await physicalByBatch()).toEqual(new Map([[batchA.id, 0], [batchB.id, 18]]));
+    expect(await prisma.retailerLedgerEntry.count({
+      where: { retailerId, referenceType: "INVOICE", referenceId: invoice.id },
+    })).toBe(1);
+
+    const movementsBeforeDispatch = await movementCount();
+    await salesOrders.updateStatus(order.id, "DISPATCHED", userId);
+    await salesOrders.updateStatus(order.id, "DISPATCHED", userId);
+    expect(await movementCount()).toBe(movementsBeforeDispatch);
+    expect(await physicalByBatch()).toEqual(new Map([[batchA.id, 0], [batchB.id, 18]]));
+    await salesOrders.updateStatus(order.id, "DELIVERED", userId);
+    await salesOrders.updateStatus(order.id, "DELIVERED", userId);
+    expect((await salesOrders.findById(order.id)).status).toBe("DELIVERED");
+    expect(await movementCount()).toBe(movementsBeforeDispatch);
+    expect(await physicalByBatch()).toEqual(new Map([[batchA.id, 0], [batchB.id, 18]]));
+    expect(await prisma.inventoryLocation.count({ where: { type: "RETAILER" } })).toBe(0);
+
+    const paymentKey = `${prefix}-p1-3a-b2b-payment`;
+    const paymentService = new PaymentService(
+      prisma,
+      new AuditLogService(prisma),
+      new RetailerLedgerService(prisma),
+    );
+    let paymentId: string | undefined;
+    try {
+      const paymentInput = {
+        branchId,
+        retailerId,
+        invoiceId: invoice.id,
+        amount: Number(invoice.grandTotal),
+        method: "CASH" as const,
+      };
+      const payment = await paymentService.create(paymentInput, userId, paymentKey);
+      paymentId = payment.id;
+      const paymentReplay = await paymentService.create(paymentInput, userId, paymentKey);
+      expect(paymentReplay.id).toBe(payment.id);
+      expect(await prisma.payment.count({ where: { id: payment.id } })).toBe(1);
+      expect(await prisma.retailerLedgerEntry.count({
+        where: { retailerId, referenceType: "PAYMENT", referenceId: payment.id },
+      })).toBe(1);
+      expect(Number((await prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } })).dueAmount)).toBe(0);
+    } finally {
+      if (paymentId) {
+        await prisma.retailerLedgerEntry.deleteMany({ where: { retailerId, referenceType: "PAYMENT", referenceId: paymentId } });
+        await prisma.payment.deleteMany({ where: { id: paymentId } });
+      }
+      await prisma.idempotencyRecord.deleteMany({ where: { scope: "payment.create", key: paymentKey } });
+    }
   });
 
   it("releases multi-batch reservations on cancellation and makes cancellation replay safe", async () => {
