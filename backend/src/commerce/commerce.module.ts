@@ -4,6 +4,7 @@ import { StorefrontSystemActorService } from './common/storefront-system-actor.s
 import { CustomerAuthModule } from './customer-auth/customer-auth.module';
 import { CustomersModule } from './customers/customers.module';
 import { ServiceabilityModule } from './serviceability/serviceability.module';
+import { StorefrontCatalogModule } from './storefront-catalog/storefront-catalog.module';
 
 @Module({
   imports: [
@@ -11,6 +12,7 @@ import { ServiceabilityModule } from './serviceability/serviceability.module';
     CustomerAuthModule,
     CustomersModule,
     ServiceabilityModule,
+    StorefrontCatalogModule,
   ],
   providers: [StorefrontSystemActorService],
   exports: [StorefrontSystemActorService],
