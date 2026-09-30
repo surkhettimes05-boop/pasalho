@@ -66,6 +66,7 @@ import { CommerceModule } from './commerce/commerce.module';
     DeliveryModule,
     NotificationModule,
     RetailerPortalModule,
+    CommerceModule,
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'public'),
       serveRoot: '/', // Serves files from public/uploads at /uploads/...
