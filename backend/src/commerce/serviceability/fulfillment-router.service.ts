@@ -25,8 +25,8 @@ type Candidate = {
 export class FulfillmentRouterService {
   constructor(private readonly geo: GeoService) {}
 
-  select(candidates: Candidate[], latitude: number, longitude: number) {
-    const eligible = candidates
+  rank(candidates: Candidate[], latitude: number, longitude: number) {
+    return candidates
       .filter(
         (candidate) =>
           candidate.isEnabled &&
@@ -57,6 +57,10 @@ export class FulfillmentRouterService {
           ),
       );
 
-    return eligible[0]?.candidate.inventoryLocation ?? null;
+      .map((entry) => entry.candidate.inventoryLocation);
+  }
+
+  select(candidates: Candidate[], latitude: number, longitude: number) {
+    return this.rank(candidates, latitude, longitude)[0] ?? null;
   }
 }

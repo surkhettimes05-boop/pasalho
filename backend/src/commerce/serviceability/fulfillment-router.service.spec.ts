@@ -44,6 +44,46 @@ describe('FulfillmentRouterService', () => {
     expect(selected?.id).toBe('store');
   });
 
+  it('returns every eligible store in deterministic priority order', () => {
+    const branch = { id: 'b', name: 'Branch', status: 'ACTIVE', deletedAt: null };
+    const ranked = router.rank(
+      [
+        {
+          priority: 20,
+          isEnabled: true,
+          inventoryLocation: {
+            id: 'second',
+            name: 'Second',
+            type: 'STORE',
+            status: 'ACTIVE',
+            latitude: 28.6,
+            longitude: 81.63,
+            branchId: 'b',
+            branch,
+          },
+        },
+        {
+          priority: 10,
+          isEnabled: true,
+          inventoryLocation: {
+            id: 'first',
+            name: 'First',
+            type: 'STORE',
+            status: 'ACTIVE',
+            latitude: 28.7,
+            longitude: 81.63,
+            branchId: 'b',
+            branch,
+          },
+        },
+      ],
+      28.6,
+      81.63,
+    );
+
+    expect(ranked.map((location) => location.id)).toEqual(['first', 'second']);
+  });
+
   it('uses priority before distance', () => {
     const branch = { id: 'b', name: 'Branch', status: 'ACTIVE', deletedAt: null };
     const selected = router.select(

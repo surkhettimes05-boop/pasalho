@@ -12,7 +12,7 @@ export class ServiceabilityService {
     private readonly router: FulfillmentRouterService,
   ) {}
 
-  async resolve(dto: ResolveServiceabilityDto) {
+  async resolveCandidates(dto: ResolveServiceabilityDto) {
     const zones = await this.prisma.serviceZone.findMany({
       where: { status: 'ACTIVE' },
       orderBy: [{ priority: 'asc' }, { name: 'asc' }],
@@ -42,32 +42,32 @@ export class ServiceabilityService {
     );
 
     if (!zone) {
-      return { serviceable: false, reason: 'OUTSIDE_SERVICE_ZONE' };
+      return { serviceable: false as const, reason: 'OUTSIDE_SERVICE_ZONE' as const };
     }
 
-    const location = this.router.select(
+    const locations = this.router.rank(
       zone.locations,
       dto.latitude,
       dto.longitude,
     );
 
-    if (!location) {
+    if (locations.length === 0) {
       return {
-        serviceable: false,
-        reason: 'FULFILLMENT_LOCATION_UNAVAILABLE',
+        serviceable: false as const,
+        reason: 'FULFILLMENT_LOCATION_UNAVAILABLE' as const,
         serviceZone: { id: zone.id, code: zone.code, name: zone.name },
       };
     }
 
     return {
-      serviceable: true,
+      serviceable: true as const,
       serviceZone: { id: zone.id, code: zone.code, name: zone.name },
-      fulfillment: {
+      fulfillments: locations.map((location) => ({
         locationId: location.id,
         branchId: location.branchId,
         storeName: location.name,
         branchName: location.branch.name,
-      },
+      })),
       delivery: {
         etaMinMinutes: zone.etaMinMinutes,
         etaMaxMinutes: zone.etaMaxMinutes,
@@ -78,6 +78,21 @@ export class ServiceabilityService {
             : Number(zone.freeDeliveryThreshold),
         minOrder: Number(zone.minOrder),
       },
+    };
+  }
+
+  async resolve(dto: ResolveServiceabilityDto) {
+    const resolved = await this.resolveCandidates(dto);
+
+    if (!resolved.serviceable) {
+      return resolved;
+    }
+
+    return {
+      serviceable: true as const,
+      serviceZone: resolved.serviceZone,
+      fulfillment: resolved.fulfillments[0],
+      delivery: resolved.delivery,
     };
   }
 }

@@ -37,11 +37,11 @@ export class CheckoutService {
     await this.carts.claimForCustomer(dto.cartToken, customerId);
     const address = await this.getAddress(customerId, dto.addressId);
 
-    const resolved = await this.serviceability.resolve({
+    const resolved = await this.serviceability.resolveCandidates({
       latitude: Number(address.latitude),
       longitude: Number(address.longitude),
     });
-    if (!resolved.serviceable || !('fulfillment' in resolved)) {
+    if (!resolved.serviceable) {
       throw new AppError(
         resolved.reason === 'FULFILLMENT_LOCATION_UNAVAILABLE'
           ? ErrorCodes.FULFILLMENT_LOCATION_UNAVAILABLE
@@ -51,11 +51,40 @@ export class CheckoutService {
       );
     }
 
-    const priced = await this.carts.priceForLocation(
-      dto.cartToken,
-      resolved.fulfillment.locationId,
-      resolved.serviceZone.id,
-    );
+    let priced: Awaited<ReturnType<CartsService['priceForLocation']>> | null = null;
+    let selectedFulfillment: (typeof resolved.fulfillments)[number] | null = null;
+
+    for (const candidate of resolved.fulfillments) {
+      try {
+        priced = await this.carts.priceForLocation(
+          dto.cartToken,
+          candidate.locationId,
+          resolved.serviceZone.id,
+        );
+        selectedFulfillment = candidate;
+        break;
+      } catch (error) {
+        if (
+          error instanceof AppError &&
+          [
+            ErrorCodes.CART_NOT_FULFILLABLE,
+            ErrorCodes.PRODUCT_NOT_ORDERABLE,
+            ErrorCodes.INSUFFICIENT_STOCK,
+          ].includes(error.code as any)
+        ) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    if (!priced || !selectedFulfillment) {
+      throw new AppError(
+        ErrorCodes.CART_NOT_FULFILLABLE,
+        'No Pasalho store in this service zone can fulfill the complete cart.',
+        422,
+      );
+    }
     if (priced.subtotal + 0.0001 < priced.minOrder) {
       throw new AppError(
         ErrorCodes.MIN_ORDER_NOT_MET,
@@ -87,7 +116,7 @@ export class CheckoutService {
     });
 
     return {
-      fulfillmentLocationId: priced.locationId,
+      fulfillmentLocationId: selectedFulfillment.locationId,
       serviceZoneId: priced.serviceZoneId,
       items: priced.items,
       subtotal: priced.subtotal,
@@ -130,15 +159,16 @@ export class CheckoutService {
     }
 
     const address = await this.getAddress(customerId, dto.addressId);
-    const resolved = await this.serviceability.resolve({
+    const resolved = await this.serviceability.resolveCandidates({
       latitude: Number(address.latitude),
       longitude: Number(address.longitude),
     });
     if (
       !resolved.serviceable ||
-      !('fulfillment' in resolved) ||
-      resolved.fulfillment.locationId !== checkoutPayload.locationId ||
-      resolved.serviceZone.id !== checkoutPayload.serviceZoneId
+      resolved.serviceZone.id !== checkoutPayload.serviceZoneId ||
+      !resolved.fulfillments.some(
+        (candidate) => candidate.locationId === checkoutPayload.locationId,
+      )
     ) {
       throw new AppError(
         ErrorCodes.CART_LOCATION_CHANGED,
