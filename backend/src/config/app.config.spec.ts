@@ -84,6 +84,30 @@ describe('appConfigSchema store sync production settings', () => {
     expect(result.error).toBeUndefined();
   });
 
+  it('rejects the console OTP provider in production', () => {
+    const result = appConfigSchema.validate({
+      ...base,
+      OTP_PROVIDER: 'console',
+      STORE_SYNC_WEBHOOK_URL: 'https://ceo.example.com/api/sync/inbound-transfers',
+      STORE_SYNC_WEBHOOK_SECRET: 's'.repeat(40),
+      CORS_ORIGIN: 'https://pasalo.example.com',
+    });
+
+    expect(result.error?.message).toContain('OTP_PROVIDER');
+  });
+
+  it('requires a separate customer JWT secret in production', () => {
+    const { CUSTOMER_JWT_SECRET: _removed, ...withoutCustomerSecret } = base;
+    const result = appConfigSchema.validate({
+      ...withoutCustomerSecret,
+      STORE_SYNC_WEBHOOK_URL: 'https://ceo.example.com/api/sync/inbound-transfers',
+      STORE_SYNC_WEBHOOK_SECRET: 's'.repeat(40),
+      CORS_ORIGIN: 'https://pasalo.example.com',
+    });
+
+    expect(result.error?.message).toContain('CUSTOMER_JWT_SECRET');
+  });
+
   it('does not require webhook settings in development or test', () => {
     const result = appConfigSchema.validate({
       NODE_ENV: 'test',

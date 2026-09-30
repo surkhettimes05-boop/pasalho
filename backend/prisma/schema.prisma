@@ -18,6 +18,18 @@ enum MasterDataStatus {
   INACTIVE
 }
 
+enum CustomerStatus {
+  ACTIVE
+  BLOCKED
+  DELETED
+}
+
+enum CustomerAddressLabel {
+  HOME
+  WORK
+  OTHER
+}
+
 enum RetailerStatus {
   ACTIVE
   ON_HOLD
@@ -405,6 +417,83 @@ model LoginAttempt {
   @@index([email])
   @@index([phone])
   @@index([createdAt])
+}
+
+
+model Customer {
+  id          String         @id @default(uuid())
+  phone       String         @unique
+  fullName    String?
+  email       String?        @unique
+  status      CustomerStatus @default(ACTIVE)
+  lastLoginAt DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  deletedAt   DateTime?
+
+  sessions  CustomerSession[]
+  addresses CustomerAddress[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model CustomerSession {
+  id               String   @id
+  customerId       String
+  refreshTokenHash String
+  refreshExpiresAt DateTime
+  deviceId         String?
+  userAgent        String?
+  ipAddress        String?
+  createdAt        DateTime @default(now())
+  revokedAt        DateTime?
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@index([refreshExpiresAt])
+}
+
+model CustomerOtpChallenge {
+  id         String   @id @default(uuid())
+  phone      String
+  codeHash   String
+  attempts   Int      @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime @default(now())
+
+  @@index([phone, createdAt])
+  @@index([expiresAt])
+}
+
+model CustomerAddress {
+  id            String               @id @default(uuid())
+  customerId    String
+  label         CustomerAddressLabel @default(HOME)
+  customLabel   String?
+  recipientName String?
+  phone         String?
+  province      String?
+  district      String?
+  municipality  String?
+  ward          String?
+  area          String
+  street        String?
+  landmark      String?
+  latitude      Decimal?             @db.Decimal(10, 7)
+  longitude     Decimal?             @db.Decimal(10, 7)
+  instructions  String?
+  isDefault     Boolean              @default(false)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  deletedAt     DateTime?
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@index([customerId, isDefault])
 }
 
 model Role {
