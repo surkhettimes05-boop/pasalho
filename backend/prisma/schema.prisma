@@ -996,7 +996,7 @@ model InventorySnapshot {
   batch    Batch?            @relation(fields: [batchId], references: [id], onDelete: Restrict)
   unit     Unit              @relation(fields: [unitId], references: [id], onDelete: Restrict)
 
-  @@unique([locationId, productId, batchId, stockState])
+  @@unique([locationId, productId, batchId, stockState, unitId])
   @@index([locationId])
   @@index([productId])
   @@index([batchId])
@@ -1533,6 +1533,7 @@ model StockReservation {
   status       StockReservationStatus @default(ACTIVE)
   createdById  String
   createdAt    DateTime               @default(now())
+  expiresAt    DateTime?
   releasedAt   DateTime?
   consumedAt   DateTime?
 
@@ -1546,6 +1547,7 @@ model StockReservation {
   @@index([salesOrderId])
   @@index([locationId])
   @@index([status])
+  @@index([expiresAt, status])
 }
 
 model StockReservationItem {
@@ -1565,9 +1567,10 @@ model StockReservationItem {
   batch          Batch?           @relation(fields: [batchId], references: [id], onDelete: Restrict)
   unit           Unit             @relation(fields: [unitId], references: [id], onDelete: Restrict)
 
-  @@unique([reservationId, salesOrderItemId])
+  @@index([reservationId, salesOrderItemId])
   @@index([salesOrderItemId])
   @@index([productId, batchId])
+  @@index([reservationId, productId, batchId, unitId])
 }
 
 model IdempotencyRecord {
