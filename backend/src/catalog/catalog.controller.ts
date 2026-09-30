@@ -124,7 +124,7 @@ export class CatalogController {
       storage: memoryStorage(),
       limits: { fileSize: 5 * 1024 * 1024 },
       fileFilter: (_req, file, callback) => {
-        callback(null, /^image\\/(jpeg|png|webp)$/.test(file.mimetype));
+        callback(null, ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype));
       },
     }),
   )
