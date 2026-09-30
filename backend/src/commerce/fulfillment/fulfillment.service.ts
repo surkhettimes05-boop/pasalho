@@ -200,10 +200,8 @@ export class StorefrontFulfillmentService {
         if (
           !order ||
           order.source !== 'STOREFRONT' ||
-          ![
-            SalesOrderStatus.PICKING,
-            SalesOrderStatus.PARTIALLY_FULFILLED,
-          ].includes(order.status)
+          (order.status !== SalesOrderStatus.PICKING &&
+            order.status !== SalesOrderStatus.PARTIALLY_FULFILLED)
         ) {
           throw new AppError(
             ErrorCodes.INVALID_ORDER_TRANSITION,
@@ -291,10 +289,8 @@ export class StorefrontFulfillmentService {
         if (
           !order ||
           order.source !== 'STOREFRONT' ||
-          ![
-            SalesOrderStatus.PICKING,
-            SalesOrderStatus.PARTIALLY_FULFILLED,
-          ].includes(order.status) ||
+          (order.status !== SalesOrderStatus.PICKING &&
+            order.status !== SalesOrderStatus.PARTIALLY_FULFILLED) ||
           !order.branchId
         ) {
           throw new AppError(
