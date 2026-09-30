@@ -221,8 +221,9 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       },
     });
 
-    // Mock email sending
-    console.log(`Password reset link: /reset-password?token=${resetToken}&email=${email}`);
+    // Mock email sending. Never log the reset token; local mail delivery should
+    // be wired through a development-only mail adapter when needed.
+    console.log(`Password reset requested for ${email}`);
     return { message: 'If the email exists, a reset link will be sent.' };
   }
 

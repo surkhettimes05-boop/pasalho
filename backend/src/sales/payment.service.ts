@@ -111,6 +111,17 @@ export class PaymentService {
           }
         }
 
+        if (invoice) {
+          const outstanding = Math.max(0, Number(invoice.grandTotal) - Number(invoice.paidAmount));
+          if (dto.amount > outstanding) {
+            throw new AppError(
+              ErrorCodes.VALIDATION_ERROR,
+              `Payment exceeds the invoice outstanding balance of ${outstanding}.`,
+              422,
+            );
+          }
+        }
+
         const payment = await tx.payment.create({
           data: {
             branchId,

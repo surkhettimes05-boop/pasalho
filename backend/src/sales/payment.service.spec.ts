@@ -94,4 +94,23 @@ describe('PaymentService', () => {
     expect(ledger.createPaymentCredit).toHaveBeenCalled();
     expect(prisma.invoice!.update).toHaveBeenCalled();
   });
+
+  it('rejects overpayment without creating a payment or ledger credit', async () => {
+    (prisma.payment!.create as jest.Mock).mockClear();
+    (ledger.createPaymentCredit as jest.Mock).mockClear();
+    (prisma.idempotencyRecord.findUnique as jest.Mock).mockResolvedValue(null);
+    (prisma.invoice!.update as jest.Mock).mockClear();
+    (prisma.$queryRaw as jest.Mock).mockResolvedValueOnce([{
+      id: 'inv-2', branchId: 'b1', retailerId: 'r1', grandTotal: 1000, paidAmount: 600, status: 'PARTIALLY_PAID',
+    }]).mockResolvedValueOnce([{ id: 'r1', branchId: 'b1' }]);
+
+    await expect(service.create(
+      { branchId: 'b1', retailerId: 'r1', invoiceId: 'inv-2', amount: 401, method: 'CASH' },
+      'user-1',
+      'payment-overpay-key',
+    )).rejects.toThrow('Payment exceeds the invoice outstanding balance');
+    expect(prisma.payment!.create).not.toHaveBeenCalled();
+    expect(prisma.invoice!.update).not.toHaveBeenCalled();
+    expect(ledger.createPaymentCredit).not.toHaveBeenCalled();
+  });
 });

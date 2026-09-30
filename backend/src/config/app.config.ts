@@ -117,6 +117,11 @@ export const appConfigSchema = Joi.object({
     then: Joi.string().min(32).allow('').optional(),
     otherwise: Joi.string().allow('').optional(),
   }),
+  PASALO_REPORTING_API_TOKEN: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().min(32).allow('').optional(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
   CEO_ONLINE_ORDER_URL: Joi.when('NODE_ENV', {
     is: 'production',
     then: Joi.string()
