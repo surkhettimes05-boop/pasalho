@@ -169,6 +169,113 @@ export class CartsService {
     return cart;
   }
 
+  async priceForLocation(
+    cartToken: string,
+    locationId: string,
+    serviceZoneId: string,
+  ) {
+    const cart = await this.requireActiveCart(cartToken);
+    const items = await this.prisma.cartItem.findMany({
+      where: { cartId: cart.id },
+      orderBy: { addedAt: 'asc' },
+    });
+    if (items.length === 0) {
+      throw new AppError(ErrorCodes.CART_NOT_FULFILLABLE, 'Cart is empty.', 422);
+    }
+
+    const zone = await this.prisma.serviceZone.findFirst({
+      where: { id: serviceZoneId, status: 'ACTIVE' },
+    });
+    if (!zone) {
+      throw new AppError(
+        ErrorCodes.OUTSIDE_SERVICE_ZONE,
+        'Service zone is unavailable.',
+        422,
+      );
+    }
+
+    const pricedItems: Array<{
+      cartItemId: string;
+      productId: string;
+      unitId: string;
+      quantity: number;
+      baseQuantity: number;
+      unitPrice: number;
+      mrp: number;
+      lineTotal: number;
+    }> = [];
+    const unavailableProductIds: string[] = [];
+    let subtotal = 0;
+
+    for (const item of items) {
+      try {
+        const orderable = await this.catalog.getOrderableProduct(
+          locationId,
+          item.productId,
+          item.unitId,
+        );
+        const quantity = Number(item.quantity);
+        const baseQuantity = quantity * orderable.conversionToBase;
+        if (
+          baseQuantity > orderable.availability.sellableBaseQuantity + 0.0000001 ||
+          quantity > orderable.availability.maxOrderQuantity + 0.0000001
+        ) {
+          unavailableProductIds.push(item.productId);
+          continue;
+        }
+
+        const lineTotal = quantity * orderable.price.sellingPrice;
+        subtotal += lineTotal;
+        pricedItems.push({
+          cartItemId: item.id,
+          productId: item.productId,
+          unitId: item.unitId,
+          quantity,
+          baseQuantity,
+          unitPrice: orderable.price.sellingPrice,
+          mrp: orderable.price.mrp,
+          lineTotal,
+        });
+      } catch {
+        unavailableProductIds.push(item.productId);
+      }
+    }
+
+    if (unavailableProductIds.length > 0) {
+      throw new AppError(
+        ErrorCodes.CART_NOT_FULFILLABLE,
+        'One or more cart items cannot be fulfilled by this store.',
+        422,
+        { unavailableProductIds },
+      );
+    }
+
+    const discountTotal = 0;
+    const freeThreshold = zone.freeDeliveryThreshold == null
+      ? null
+      : Number(zone.freeDeliveryThreshold);
+    const deliveryFee =
+      freeThreshold != null && subtotal >= freeThreshold
+        ? 0
+        : Number(zone.deliveryFee);
+    const grandTotal = subtotal - discountTotal + deliveryFee;
+
+    return {
+      cartId: cart.id,
+      cartToken: cart.cartToken,
+      customerId: cart.customerId,
+      locationId,
+      serviceZoneId,
+      items: pricedItems,
+      subtotal,
+      discountTotal,
+      deliveryFee,
+      handlingFee: 0,
+      grandTotal,
+      minOrder: Number(zone.minOrder),
+    };
+  }
+
   async requireActiveCart(cartToken: string) {
     const cart = await this.prisma.cart.findUnique({
       where: { cartToken },

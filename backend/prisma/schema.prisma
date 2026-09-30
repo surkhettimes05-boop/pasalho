@@ -42,6 +42,31 @@ enum CartStatus {
   EXPIRED
 }
 
+enum CommercePaymentMethod {
+  COD
+  ESEWA
+  KHALTI
+  BANK
+}
+
+enum CommercePaymentStatus {
+  PENDING
+  AUTHORIZED
+  PAID
+  FAILED
+  CANCELLED
+  REFUND_PENDING
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum OrderStatusEventActor {
+  CUSTOMER
+  STAFF
+  SYSTEM
+  RIDER
+}
+
 enum RetailerStatus {
   ACTIVE
   ON_HOLD
@@ -214,9 +239,15 @@ enum SalesOrderStatus {
   CONFIRMED
   INVOICED
   PLACED
+  PICKING
   PACKED
+  OUT_FOR_DELIVERY
   DELIVERED
+  PARTIALLY_FULFILLED
   CANCELLED
+  FAILED
+  REFUND_PENDING
+  REFUNDED
 }
 
 enum OrderSource {
@@ -446,6 +477,8 @@ model Customer {
   sessions  CustomerSession[]
   addresses CustomerAddress[]
   carts     Cart[]
+  orders    SalesOrder[]
+  payments  CommercePayment[]
 
   @@index([status])
   @@index([createdAt])
@@ -463,6 +496,7 @@ model CustomerSession {
   revokedAt        DateTime?
 
   customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  orders   SalesOrder[]
 
   @@index([customerId])
   @@index([refreshExpiresAt])
@@ -665,6 +699,7 @@ model InventoryLocation {
   serviceZones              ServiceZoneFulfillmentLocation[]
   storeProductConfigs       StoreProductConfig[]
   carts                     Cart[]
+  storefrontOrders          SalesOrder[] @relation("StorefrontFulfillmentLocation")
 
   @@unique([branchId, code])
   @@index([branchId])
@@ -842,6 +877,7 @@ model Cart {
   inventoryLocation InventoryLocation @relation(fields: [inventoryLocationId], references: [id], onDelete: Restrict)
   serviceZone       ServiceZone?      @relation(fields: [serviceZoneId], references: [id], onDelete: SetNull)
   items             CartItem[]
+  convertedOrder    SalesOrder?
 
   @@index([customerId, status])
   @@index([inventoryLocationId])
@@ -1526,36 +1562,107 @@ model SalesOrder {
   branchId       String?
   salesRepId     String?
   routeId        String?
-  retailerId     String?
-  status         SalesOrderStatus @default(DRAFT)
-  notes          String?
+  retailerId            String?
+  customerId            String?
+  customerAddressId     String?
+  fulfillmentLocationId String?
+  cartId                String?          @unique
+  status                SalesOrderStatus @default(DRAFT)
+  notes                 String?
   idempotencyKey String?          @unique
   subtotal       Decimal          @default(0) @db.Decimal(18, 4)
   discountTotal  Decimal          @default(0) @db.Decimal(18, 4)
   taxTotal       Decimal          @default(0) @db.Decimal(18, 4)
-  grandTotal     Decimal          @default(0) @db.Decimal(18, 4)
-  invoiceId      String?          @unique
-  createdById    String
-  confirmedAt    DateTime?
+  grandTotal              Decimal          @default(0) @db.Decimal(18, 4)
+  deliveryFee             Decimal          @default(0) @db.Decimal(18, 4)
+  handlingFee             Decimal          @default(0) @db.Decimal(18, 4)
+  couponDiscount          Decimal          @default(0) @db.Decimal(18, 4)
+  deliveryAddressSnapshot Json?
+  deliveryInstructions    String?
+  invoiceId               String?          @unique
+  createdById             String
+  placedAt                DateTime?
+  confirmedAt             DateTime?
+  pickingStartedAt        DateTime?
+  packedAt                DateTime?
+  outForDeliveryAt        DateTime?
+  deliveredAt             DateTime?
+  cancelledAt             DateTime?
+  cancellationReason      String?
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
   branch       Branch?            @relation(fields: [branchId], references: [id], onDelete: Restrict)
   salesRep     SalesRep?          @relation(fields: [salesRepId], references: [id], onDelete: SetNull)
   route        Route?             @relation(fields: [routeId], references: [id], onDelete: SetNull)
-  retailer     Retailer?          @relation(fields: [retailerId], references: [id], onDelete: Restrict)
-  invoice      Invoice?           @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  retailer            Retailer?          @relation(fields: [retailerId], references: [id], onDelete: Restrict)
+  customer            Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customerAddress     CustomerAddress?   @relation(fields: [customerAddressId], references: [id], onDelete: SetNull)
+  fulfillmentLocation InventoryLocation? @relation("StorefrontFulfillmentLocation", fields: [fulfillmentLocationId], references: [id], onDelete: Restrict)
+  cart                Cart?              @relation(fields: [cartId], references: [id], onDelete: SetNull)
+  invoice             Invoice?           @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   createdBy    User               @relation("SalesOrderCreator", fields: [createdById], references: [id], onDelete: Restrict)
   items        SalesOrderItem[]
-  reservations StockReservation[]
+  reservations     StockReservation[]
+  commercePayments CommercePayment[]
+  statusEvents     OrderStatusEvent[]
 
   @@index([branchId])
   @@index([salesRepId])
   @@index([routeId])
   @@index([retailerId])
+  @@index([customerId, createdAt])
+  @@index([fulfillmentLocationId, status])
+  @@index([source, status, createdAt])
   @@index([status])
   @@index([createdAt])
 }
+
+model CommercePayment {
+  id                String                @id @default(uuid())
+  paymentNo         String                @unique
+  customerId        String
+  salesOrderId      String
+  method            CommercePaymentMethod
+  status            CommercePaymentStatus @default(PENDING)
+  amount            Decimal               @db.Decimal(18, 4)
+  provider          String?
+  providerReference String?
+  providerPayload   Json?
+  idempotencyKey    String?               @unique
+  authorizedAt      DateTime?
+  paidAt            DateTime?
+  failedAt          DateTime?
+  refundedAt        DateTime?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  customer   Customer   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+
+  @@index([customerId])
+  @@index([salesOrderId])
+  @@index([status])
+}
+
+model OrderStatusEvent {
+  id           String                @id @default(uuid())
+  salesOrderId String
+  fromStatus   SalesOrderStatus?
+  toStatus     SalesOrderStatus
+  actorType    OrderStatusEventActor
+  actorUserId  String?
+  customerId   String?
+  reasonCode   String?
+  note         String?
+  metadata     Json?
+  createdAt    DateTime              @default(now())
+
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+
+  @@index([salesOrderId, createdAt])
+}
+
 
 model SalesOrderItem {
   id             String   @id @default(uuid())

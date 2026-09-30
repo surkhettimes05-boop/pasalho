@@ -59,6 +59,8 @@ export const appConfigSchema = Joi.object({
   OTP_TTL_SECONDS: Joi.number().integer().min(60).max(900).default(300),
   OTP_MAX_ATTEMPTS: Joi.number().integer().min(1).max(10).default(5),
   CART_TTL_HOURS: Joi.number().integer().min(1).max(720).default(72),
+  CHECKOUT_TOKEN_TTL_SECONDS: Joi.number().integer().min(60).max(900).default(300),
+  ORDER_RESERVATION_TTL_MINUTES: Joi.number().integer().min(5).max(120).default(20),
   STOREFRONT_SYSTEM_USER_ID: Joi.when('NODE_ENV', {
     is: 'production',
     then: Joi.string().guid({ version: ['uuidv4'] }).required(),

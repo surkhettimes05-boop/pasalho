@@ -177,102 +177,12 @@ export class SalesOrderService {
     return this.findById(result.order.id);
   }
 
-  async createPublicOrder(dto: PublicCheckoutDto) {
-    const SYSTEM_USER_ID = '99999999-9999-4999-a999-999999999999';
-    const orderNo = `ORD-${Date.now()}`;
-    const fiveMinsAgo = new Date(Date.now() - 5 * 60 * 1000);
-
-    const customerInfoStr = JSON.stringify({
-      name: `${dto.firstName} ${dto.lastName}`,
-      phone: dto.phone,
-      address: dto.address,
-    });
-
-    // 1. Validate Products & Recalculate Subtotal & Check Stock
-    let subtotal = 0;
-    const validatedItems = [];
-
-    for (const item of dto.items) {
-      const product = await this.prisma.product.findUnique({
-        where: { id: item.productId, isActive: true },
-        include: { defaultUnit: true }
-      });
-
-      if (!product) {
-        throw new AppError(ErrorCodes.NOT_FOUND, `Product not found or inactive: ${item.productId}`, 404);
-      }
-
-      if (product.stock < item.quantity) {
-        throw new AppError(ErrorCodes.VALIDATION_ERROR, `Insufficient stock for ${product.name}. Available: ${product.stock}`, 422);
-      }
-
-      const unitPrice = Number(product.sellingPrice || product.mrp || 0);
-      subtotal += item.quantity * unitPrice;
-
-      validatedItems.push({
-        productId: product.id,
-        unitId: product.defaultUnitId,
-        quantity: item.quantity,
-        baseQuantity: item.quantity, // Simplified for storefront
-        unitPrice: unitPrice,
-        lineTotal: item.quantity * unitPrice,
-      });
-    }
-
-    // 2. Idempotency Check: Exact same phone AND exact same total within last 5 mins
-    const duplicate = await this.prisma.salesOrder.findFirst({
-      where: {
-        source: 'STOREFRONT',
-        createdAt: { gte: fiveMinsAgo },
-        notes: { contains: `"phone":"${dto.phone}"` },
-        grandTotal: subtotal
-      }
-    });
-
-    if (duplicate) {
-      throw new AppError(ErrorCodes.CONFLICT, 'An identical order was already placed recently. Please wait a few minutes or check your order history.', 409);
-    }
-
-    // 3. Save Order inside a transaction
-    const order = await this.prisma.$transaction(async (tx) => {
-      const o = await tx.salesOrder.create({
-        data: {
-          orderNo,
-          source: 'STOREFRONT',
-          status: 'PLACED',
-          notes: customerInfoStr,
-          subtotal,
-          grandTotal: subtotal,
-          createdById: SYSTEM_USER_ID,
-        },
-      });
-
-      for (const item of validatedItems) {
-        await tx.salesOrderItem.create({
-          data: {
-            salesOrderId: o.id,
-            productId: item.productId,
-            unitId: item.unitId,
-            quantity: item.quantity,
-            baseQuantity: item.baseQuantity,
-            unitPrice: item.unitPrice,
-            lineTotal: item.lineTotal,
-          },
-        });
-      }
-
-      return o;
-    });
-
-    await this.audit.record({
-      actorUserId: SYSTEM_USER_ID,
-      action: 'SALES_ORDER_CREATED',
-      entityType: 'SALES_ORDER',
-      entityId: order.id,
-      afterData: { orderNo, grandTotal: subtotal, source: 'STOREFRONT' },
-    });
-
-    return this.findById(order.id);
+  async createPublicOrder(_dto: PublicCheckoutDto) {
+    throw new AppError(
+      ErrorCodes.CONFLICT,
+      'Legacy public checkout is disabled. Use /api/v1/commerce/checkout/preview and /api/v1/commerce/orders.',
+      410,
+    );
   }
 
   async confirm(id: string, actorUserId: string) {
