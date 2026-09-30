@@ -6,6 +6,7 @@ import { CustomersModule } from './customers/customers.module';
 import { ServiceabilityModule } from './serviceability/serviceability.module';
 import { StorefrontCatalogModule } from './storefront-catalog/storefront-catalog.module';
 import { CheckoutModule } from './checkout/checkout.module';
+import { CartsModule } from './carts/carts.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { CheckoutModule } from './checkout/checkout.module';
     ServiceabilityModule,
     StorefrontCatalogModule,
     CheckoutModule,
+    CartsModule,
   ],
   providers: [StorefrontSystemActorService],
   exports: [StorefrontSystemActorService],

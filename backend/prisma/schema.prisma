@@ -35,6 +35,13 @@ enum ServiceZoneStatus {
   INACTIVE
 }
 
+enum CartStatus {
+  ACTIVE
+  CONVERTED
+  ABANDONED
+  EXPIRED
+}
+
 enum RetailerStatus {
   ACTIVE
   ON_HOLD
@@ -438,6 +445,7 @@ model Customer {
 
   sessions  CustomerSession[]
   addresses CustomerAddress[]
+  carts     Cart[]
 
   @@index([status])
   @@index([createdAt])
@@ -656,6 +664,7 @@ model InventoryLocation {
   StockReservation          StockReservation[]
   serviceZones              ServiceZoneFulfillmentLocation[]
   storeProductConfigs       StoreProductConfig[]
+  carts                     Cart[]
 
   @@unique([branchId, code])
   @@index([branchId])
@@ -682,6 +691,7 @@ model ServiceZone {
   updatedAt             DateTime          @updatedAt
 
   locations ServiceZoneFulfillmentLocation[]
+  carts     Cart[]
 
   @@index([status, priority])
 }
@@ -752,6 +762,7 @@ model Unit {
   salesOrderItems       SalesOrderItem[]
   damageReportItems     DamageReportItem[]
   stockReservationItems StockReservationItem[]
+  cartItems             CartItem[]
 }
 
 model Product {
@@ -799,6 +810,7 @@ model Product {
   stockReservationItems StockReservationItem[]
   images                ProductImage[]
   storeConfigs          StoreProductConfig[]
+  cartItems             CartItem[]
 
   @@index([categoryId])
   @@index([brandId])
@@ -807,6 +819,50 @@ model Product {
   @@index([defaultUnitId])
   @@index([barcode])
   @@index([isActive])
+}
+
+model Cart {
+  id                  String     @id @default(uuid())
+  cartToken           String     @unique
+  customerId          String?
+  inventoryLocationId String
+  serviceZoneId       String?
+  status              CartStatus @default(ACTIVE)
+  currency            String     @default("NPR")
+  subtotal            Decimal    @default(0) @db.Decimal(18, 4)
+  discountTotal       Decimal    @default(0) @db.Decimal(18, 4)
+  deliveryFee         Decimal    @default(0) @db.Decimal(18, 4)
+  grandTotal          Decimal    @default(0) @db.Decimal(18, 4)
+  version             Int        @default(1)
+  expiresAt           DateTime
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  customer          Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  inventoryLocation InventoryLocation @relation(fields: [inventoryLocationId], references: [id], onDelete: Restrict)
+  serviceZone       ServiceZone?      @relation(fields: [serviceZoneId], references: [id], onDelete: SetNull)
+  items             CartItem[]
+
+  @@index([customerId, status])
+  @@index([inventoryLocationId])
+  @@index([expiresAt])
+}
+
+model CartItem {
+  id        String   @id @default(uuid())
+  cartId    String
+  productId String
+  unitId    String
+  quantity  Decimal  @db.Decimal(18, 6)
+  addedAt   DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cart    Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  unit    Unit    @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@unique([cartId, productId, unitId])
+  @@index([cartId])
 }
 
 model ProductGroup {
