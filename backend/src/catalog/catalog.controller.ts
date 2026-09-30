@@ -12,9 +12,7 @@ import {
   UploadedFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
-import { v4 as uuidv4 } from 'uuid';
+import { memoryStorage } from 'multer';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -123,15 +121,19 @@ export class CatalogController {
   @ApiOperation({ summary: 'Upload product image' })
   @UseInterceptors(
     FileInterceptor('file', {
-      storage: cloudinaryStorage,
+      storage: memoryStorage(),
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, callback) => {
+        callback(null, /^image\\/(jpeg|png|webp)$/.test(file.mimetype));
+      },
     }),
   )
-  uploadProductImage(@UploadedFile() file: Express.Multer.File) {
+  async uploadProductImage(@UploadedFile() file: Express.Multer.File) {
     if (!file) {
-      throw new Error('No file uploaded');
+      throw new Error('No valid image file uploaded');
     }
-    // multer-storage-cloudinary provides the URL in file.path
-    return { imageUrl: file.path };
+    const result = await uploadImageBuffer(file.buffer);
+    return { imageUrl: result.secure_url };
   }
 
   @Get('products/:id')
