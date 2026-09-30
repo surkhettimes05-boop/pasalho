@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import {
   FulfillmentShortageAction,
   Prisma,
@@ -8,6 +9,8 @@ import { AppError } from '../../common/errors/app-error';
 import { ErrorCodes } from '../../common/errors/error-codes';
 import { PaginationDto } from '../../common/dto/pagination.dto';
 import { PrismaService } from '../../database/prisma.service';
+import { AuditLogService } from '../../audit/audit-log.service';
+import { StockReservationService } from '../../inventory/services/stock-reservation.service';
 import { StorefrontReservationService } from '../checkout/storefront-reservation.service';
 import { OrderStateMachineService } from '../orders/order-state-machine.service';
 import { PickStorefrontItemDto } from './dto/pick-item.dto';
@@ -33,6 +36,8 @@ export class StorefrontFulfillmentService {
     private readonly prisma: PrismaService,
     private readonly reservations: StorefrontReservationService,
     private readonly states: OrderStateMachineService,
+    private readonly stockReservations: StockReservationService,
+    private readonly audit: AuditLogService,
   ) {}
 
   async list(
@@ -113,6 +118,14 @@ export class StorefrontFulfillmentService {
           include: { items: true },
         },
         statusEvents: { orderBy: { createdAt: 'asc' } },
+        commercePayments: true,
+        invoice: true,
+        deliveryItems: {
+          include: {
+            delivery: true,
+            invoice: true,
+          },
+        },
       },
     });
     if (!order) {
@@ -487,4 +500,379 @@ export class StorefrontFulfillmentService {
 
     return this.detail(orderId);
   }
+
+  async dispatch(orderId: string, actorUserId: string) {
+    const result = await this.prisma.$transaction(
+      async (tx) => {
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM "SalesOrder"
+          WHERE id = ${orderId}
+          FOR UPDATE
+        `;
+        if (!locked[0]) {
+          throw new AppError(ErrorCodes.NOT_FOUND, 'Order not found.', 404);
+        }
+
+        const order = await tx.salesOrder.findUnique({
+          where: { id: orderId },
+          include: {
+            items: true,
+            reservations: {
+              where: { status: 'ACTIVE' },
+              include: {
+                items: {
+                  include: { salesOrderItem: true },
+                },
+              },
+            },
+            deliveryItems: {
+              include: { delivery: true, invoice: true },
+            },
+          },
+        });
+
+        if (!order || order.source !== 'STOREFRONT') {
+          throw new AppError(
+            ErrorCodes.NOT_FOUND,
+            'Storefront order not found.',
+            404,
+          );
+        }
+
+        if (
+          order.status === SalesOrderStatus.OUT_FOR_DELIVERY ||
+          order.status === SalesOrderStatus.DELIVERED
+        ) {
+          return {
+            branchId: order.branchId ?? undefined,
+            alreadyDispatched: true,
+          };
+        }
+
+        if (
+          order.status !== SalesOrderStatus.PACKED ||
+          !order.branchId ||
+          !order.fulfillmentLocationId
+        ) {
+          throw new AppError(
+            ErrorCodes.INVALID_ORDER_TRANSITION,
+            'Only a packed storefront order can be dispatched.',
+            409,
+          );
+        }
+
+        const reservationItems = order.reservations.flatMap(
+          (reservation) => reservation.items,
+        );
+        if (reservationItems.length === 0) {
+          throw new AppError(
+            ErrorCodes.CONFLICT,
+            'Packed order has no active inventory reservation.',
+            409,
+          );
+        }
+
+        const invoice = await tx.invoice.create({
+          data: {
+            branchId: order.branchId,
+            invoiceNumber:
+              `INV-WEB-${Date.now()}-${randomUUID().slice(0, 8).toUpperCase()}`,
+            invoiceType: 'SALE',
+            retailerId: null,
+            warehouseId: null,
+            sourceLocationId: order.fulfillmentLocationId,
+            status: 'POSTED',
+            paymentStatus: 'UNPAID',
+            subtotal: order.subtotal,
+            discountTotal:
+              Number(order.discountTotal) + Number(order.couponDiscount),
+            taxTotal: order.taxTotal,
+            grandTotal: order.grandTotal,
+            paidAmount: 0,
+            dueAmount: order.grandTotal,
+            createdById: actorUserId,
+            postedById: actorUserId,
+            postedAt: new Date(),
+          },
+        });
+
+        for (const allocation of reservationItems) {
+          const source = allocation.salesOrderItem;
+          const orderedBase = Number(source.baseQuantity);
+          if (orderedBase <= 0.0000001) continue;
+
+          const fraction =
+            Number(allocation.baseQuantity) / orderedBase;
+          const quantity = Number(source.quantity) * fraction;
+          const lineTotal = Number(source.lineTotal) * fraction;
+
+          await tx.invoiceItem.create({
+            data: {
+              invoiceId: invoice.id,
+              productId: source.productId,
+              batchId: allocation.batchId,
+              unitId: source.unitId,
+              quantity,
+              baseQuantity: allocation.baseQuantity,
+              unitPrice: source.unitPrice,
+              discountAmount: Number(source.discountAmount) * fraction,
+              taxAmount: Number(source.taxAmount) * fraction,
+              lineTotal,
+            },
+          });
+        }
+
+        await tx.salesOrder.update({
+          where: { id: order.id },
+          data: { invoiceId: invoice.id },
+        });
+
+        await this.stockReservations.consumeForOrder(tx, {
+          salesOrderId: order.id,
+          invoiceId: invoice.id,
+          branchId: order.branchId,
+          createdById: actorUserId,
+        });
+
+        await tx.financialLedgerEntry.create({
+          data: {
+            branchId: order.branchId,
+            entryType: 'SALES_CREDIT',
+            referenceType: 'INVOICE',
+            referenceId: invoice.id,
+            debitAmount: 0,
+            creditAmount: order.grandTotal,
+            createdById: actorUserId,
+          },
+        });
+
+        const delivery = await tx.delivery.create({
+          data: {
+            deliveryNo:
+              `DLV-WEB-${Date.now()}-${randomUUID().slice(0, 8).toUpperCase()}`,
+            branchId: order.branchId,
+            status: 'IN_TRANSIT',
+            dispatchedAt: new Date(),
+            notes: 'Storefront direct-customer delivery',
+            createdById: actorUserId,
+          },
+        });
+
+        await tx.deliveryItem.create({
+          data: {
+            deliveryId: delivery.id,
+            retailerId: null,
+            invoiceId: invoice.id,
+            orderId: order.id,
+          },
+        });
+
+        await this.states.transition(tx, {
+          orderId: order.id,
+          toStatus: SalesOrderStatus.OUT_FOR_DELIVERY,
+          actorType: 'STAFF',
+          actorUserId,
+          reasonCode: 'ORDER_DISPATCHED',
+          metadata: {
+            invoiceId: invoice.id,
+            deliveryId: delivery.id,
+          },
+        });
+
+        return {
+          branchId: order.branchId,
+          alreadyDispatched: false,
+          invoiceId: invoice.id,
+          deliveryId: delivery.id,
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+
+    if (!result.alreadyDispatched) {
+      await this.audit.record({
+        actorUserId,
+        action: 'DELIVERY_UPDATED',
+        entityType: 'SALES_ORDER',
+        entityId: orderId,
+        branchId: result.branchId,
+        afterData: {
+          status: 'OUT_FOR_DELIVERY',
+          invoiceId: result.invoiceId,
+          deliveryId: result.deliveryId,
+        },
+      });
+    }
+
+    return this.detail(orderId);
+  }
+
+  async deliver(orderId: string, actorUserId: string) {
+    const result = await this.prisma.$transaction(
+      async (tx) => {
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM "SalesOrder"
+          WHERE id = ${orderId}
+          FOR UPDATE
+        `;
+        if (!locked[0]) {
+          throw new AppError(ErrorCodes.NOT_FOUND, 'Order not found.', 404);
+        }
+
+        const order = await tx.salesOrder.findUnique({
+          where: { id: orderId },
+          include: {
+            commercePayments: true,
+            invoice: true,
+            deliveryItems: { include: { delivery: true } },
+          },
+        });
+        if (!order || order.source !== 'STOREFRONT') {
+          throw new AppError(
+            ErrorCodes.NOT_FOUND,
+            'Storefront order not found.',
+            404,
+          );
+        }
+
+        if (order.status === SalesOrderStatus.DELIVERED) {
+          return {
+            branchId: order.branchId ?? undefined,
+            alreadyDelivered: true,
+          };
+        }
+        if (
+          order.status !== SalesOrderStatus.OUT_FOR_DELIVERY ||
+          !order.branchId ||
+          !order.invoice
+        ) {
+          throw new AppError(
+            ErrorCodes.INVALID_ORDER_TRANSITION,
+            'Only an out-for-delivery storefront order can be delivered.',
+            409,
+          );
+        }
+
+        const payment = order.commercePayments.find(
+          (candidate) => candidate.method === 'COD',
+        );
+        if (!payment) {
+          throw new AppError(
+            ErrorCodes.PAYMENT_FAILED,
+            'COD payment record is missing.',
+            409,
+          );
+        }
+        if (
+          !['PENDING', 'AUTHORIZED', 'PAID'].includes(payment.status)
+        ) {
+          throw new AppError(
+            ErrorCodes.PAYMENT_FAILED,
+            'COD payment is not collectible in its current state.',
+            409,
+          );
+        }
+
+        const now = new Date();
+        if (payment.status !== 'PAID') {
+          await tx.commercePayment.update({
+            where: { id: payment.id },
+            data: { status: 'PAID', paidAt: now },
+          });
+        }
+
+        await tx.invoice.update({
+          where: { id: order.invoice.id },
+          data: {
+            status: 'PAID',
+            paymentStatus: 'PAID',
+            paidAmount: order.grandTotal,
+            dueAmount: 0,
+          },
+        });
+
+        const cashEntry = await tx.financialLedgerEntry.findFirst({
+          where: {
+            referenceType: 'PAYMENT',
+            referenceId: payment.id,
+            entryType: 'CASH_DEBIT',
+          },
+          select: { id: true },
+        });
+        if (!cashEntry) {
+          await tx.financialLedgerEntry.create({
+            data: {
+              branchId: order.branchId,
+              entryType: 'CASH_DEBIT',
+              referenceType: 'PAYMENT',
+              referenceId: payment.id,
+              debitAmount: order.grandTotal,
+              creditAmount: 0,
+              createdById: actorUserId,
+            },
+          });
+        }
+
+        const deliveryItem = order.deliveryItems.find(
+          (candidate) => candidate.orderId === order.id,
+        );
+        if (!deliveryItem) {
+          throw new AppError(
+            ErrorCodes.NOT_FOUND,
+            'Delivery record is missing for this order.',
+            404,
+          );
+        }
+
+        await tx.deliveryItem.update({
+          where: { id: deliveryItem.id },
+          data: { isDelivered: true },
+        });
+        await tx.delivery.update({
+          where: { id: deliveryItem.deliveryId },
+          data: {
+            status: 'DELIVERED',
+            completedAt: now,
+          },
+        });
+
+        await this.states.transition(tx, {
+          orderId: order.id,
+          toStatus: SalesOrderStatus.DELIVERED,
+          actorType: 'STAFF',
+          actorUserId,
+          reasonCode: 'ORDER_DELIVERED',
+          metadata: {
+            invoiceId: order.invoice.id,
+            paymentId: payment.id,
+            deliveryId: deliveryItem.deliveryId,
+          },
+        });
+
+        return {
+          branchId: order.branchId,
+          alreadyDelivered: false,
+          paymentId: payment.id,
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+
+    if (!result.alreadyDelivered) {
+      await this.audit.record({
+        actorUserId,
+        action: 'DELIVERY_COMPLETED',
+        entityType: 'SALES_ORDER',
+        entityId: orderId,
+        branchId: result.branchId,
+        afterData: {
+          status: 'DELIVERED',
+          paymentId: result.paymentId,
+        },
+      });
+    }
+
+    return this.detail(orderId);
+  }
+
 }

@@ -90,4 +90,21 @@ export class StorefrontFulfillmentController {
   pack(@Param('id') id: string, @CurrentUser() actor: User) {
     return this.fulfillment.pack(id, actor.id);
   }
+
+  @Post(':id/dispatch')
+  @RequirePermissions('deliveries.manage')
+  @RequireScope('order')
+  @ApiOperation({ summary: 'Dispatch a packed storefront order and consume its reservation' })
+  dispatch(@Param('id') id: string, @CurrentUser() actor: User) {
+    return this.fulfillment.dispatch(id, actor.id);
+  }
+
+  @Post(':id/deliver')
+  @RequirePermissions('deliveries.manage')
+  @RequireScope('order')
+  @ApiOperation({ summary: 'Complete delivery and collect COD payment' })
+  deliver(@Param('id') id: string, @CurrentUser() actor: User) {
+    return this.fulfillment.deliver(id, actor.id);
+  }
+
 }
