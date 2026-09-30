@@ -10,9 +10,7 @@ import {
 import { StorefrontAvailabilityService } from './availability.service';
 import { StorefrontPricingService } from './pricing.service';
 
-function productIncludeForLocation(
-  locationId: string,
-): Prisma.StoreProductConfigInclude {
+function productIncludeForLocation(locationId: string) {
   return {
     product: {
       include: {
@@ -25,7 +23,7 @@ function productIncludeForLocation(
         snapshots: {
           where: {
             locationId,
-            stockState: 'AVAILABLE',
+            stockState: 'AVAILABLE' as const,
             baseQuantity: { gt: 0 },
           },
           include: { batch: true },
