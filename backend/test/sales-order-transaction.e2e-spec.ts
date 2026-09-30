@@ -1232,6 +1232,110 @@ describe("Sales-order transaction (real PostgreSQL)", () => {
     }
   });
 
+  it("proves public online warehouse allocation, dispatch, delivery, and pre-dispatch cancellation", async () => {
+    await seedBatchStock([
+      { name: "p1-4-online-batch-a", quantity: 1, expiryDate: new Date("2026-11-01T00:00:00Z") },
+      { name: "p1-4-online-batch-b", quantity: 10, expiryDate: new Date("2027-01-01T00:00:00Z") },
+    ]);
+    const batches = await prisma.batch.findMany({
+      where: { productId, batchNumber: { startsWith: `${prefix}-p1-4-online-` } },
+      orderBy: { expiryDate: "asc" },
+    });
+    const [batchA, batchB] = batches;
+    const orderKey = `${prefix}-p1-4-online-order`;
+    const externalOrderId = `${prefix}-commerce-order`;
+    const orderInput = {
+      firstName: "Online",
+      lastName: "Customer",
+      phone: "9812345678",
+      address: "Test Street, Kathmandu, Bagmati, 44600, NP",
+      externalOrderId,
+      idempotencyKey: orderKey,
+      items: [{ productId, quantity: 2 }],
+    };
+    const order = (await salesOrders.createPublicOrder(orderInput, orderKey)) as any;
+    expect(order.source).toBe("STOREFRONT");
+    expect(order.branchId).toBe(branchId);
+    expect(JSON.parse(order.notes).externalOrderId).toBe(externalOrderId);
+    expect(Number(order.items[0].unitPrice)).toBe(10);
+
+    const reservation = await prisma.stockReservation.findFirstOrThrow({
+      where: { salesOrderId: order.id },
+      include: { items: true },
+    });
+    expect(reservation.locationId).toBe(locationId);
+    expect(reservation.status).toBe("ACTIVE");
+    expect(new Map(reservation.items.map((item) => [item.batchId, Number(item.baseQuantity)]))).toEqual(
+      new Map([[batchA.id, 1], [batchB.id, 1]]),
+    );
+    const physicalByBatch = async () => {
+      const rows = await prisma.inventorySnapshot.findMany({
+        where: { locationId, productId, batchId: { in: [batchA.id, batchB.id] } },
+        select: { batchId: true, stockState: true, baseQuantity: true },
+      });
+      return new Map([batchA.id, batchB.id].map((batchId) => [
+        batchId,
+        rows
+          .filter((row) => row.batchId === batchId && ["AVAILABLE", "RESERVED"].includes(row.stockState))
+          .reduce((sum, row) => sum + Number(row.baseQuantity), 0),
+      ]));
+    };
+    expect([...((await physicalByBatch()).values())].reduce((sum, quantity) => sum + quantity, 0)).toBe(11);
+    const replayedOrder = (await salesOrders.createPublicOrder(orderInput, orderKey)) as any;
+    expect(replayedOrder.id).toBe(order.id);
+    expect(await prisma.stockReservation.count({ where: { salesOrderId: order.id } })).toBe(1);
+
+    await salesOrders.updateStatus(order.id, "PICKING", userId);
+    await salesOrders.updateStatus(order.id, "PACKED", userId);
+    expect((await prisma.stockReservation.findUniqueOrThrow({ where: { id: reservation.id } })).status).toBe("ACTIVE");
+    const movementsBeforeDispatch = await movementCount();
+    await salesOrders.updateStatus(order.id, "DISPATCHED", userId);
+    const dispatchMovements = await prisma.inventoryMovement.findMany({
+      where: { referenceType: "SALES_ORDER", referenceId: order.id, movementType: "SALE_DEDUCTION" },
+      select: { locationId: true, batchId: true, stockState: true, baseQuantityDelta: true },
+    });
+    expect(dispatchMovements).toHaveLength(2);
+    expect(dispatchMovements.every((movement) => movement.locationId === locationId && movement.stockState === "RESERVED")).toBe(true);
+    expect(new Map(dispatchMovements.map((movement) => [movement.batchId, Number(movement.baseQuantityDelta)]))).toEqual(
+      new Map([[batchA.id, -1], [batchB.id, -1]]),
+    );
+    expect((await prisma.stockReservation.findUniqueOrThrow({ where: { id: reservation.id } })).status).toBe("CONSUMED");
+    expect(await physicalByBatch()).toEqual(new Map([[batchA.id, 0], [batchB.id, 9]]));
+    const movementsAfterDispatch = await movementCount();
+    expect(movementsAfterDispatch).toBe(movementsBeforeDispatch + 2);
+    await salesOrders.updateStatus(order.id, "DISPATCHED", userId);
+    expect(await movementCount()).toBe(movementsAfterDispatch);
+    await salesOrders.updateStatus(order.id, "DELIVERED", userId);
+    await salesOrders.updateStatus(order.id, "DELIVERED", userId);
+    expect((await salesOrders.findById(order.id)).status).toBe("DELIVERED");
+    expect(await movementCount()).toBe(movementsAfterDispatch);
+    expect(await physicalByBatch()).toEqual(new Map([[batchA.id, 0], [batchB.id, 9]]));
+    await expect(salesOrders.cancelPublicOrder(order.id, userId)).rejects.toThrow(/cannot be cancelled/i);
+
+    const cancelKey = `${prefix}-p1-4-cancel-order`;
+    const cancelOrder = (await salesOrders.createPublicOrder({
+      ...orderInput,
+      externalOrderId: `${prefix}-commerce-cancel-order`,
+      idempotencyKey: cancelKey,
+    }, cancelKey)) as any;
+    const cancelReservation = await prisma.stockReservation.findFirstOrThrow({ where: { salesOrderId: cancelOrder.id } });
+    const beforeCancellationPhysical = await physicalByBatch();
+    expect((await prisma.inventorySnapshot.findFirstOrThrow({
+      where: { locationId, productId, batchId: batchB.id, stockState: "RESERVED" },
+    })).baseQuantity.toNumber()).toBe(2);
+    const movementsBeforeCancel = await movementCount();
+    const cancelled = await salesOrders.cancelPublicOrder(cancelOrder.id, userId);
+    expect(cancelled.status).toBe("CANCELLED");
+    const movementsAfterCancel = await movementCount();
+    expect(movementsAfterCancel).toBe(movementsBeforeCancel + 2);
+    expect((await prisma.stockReservation.findUniqueOrThrow({ where: { id: cancelReservation.id } })).status).toBe("RELEASED");
+    expect(await physicalByBatch()).toEqual(beforeCancellationPhysical);
+    const cancelledReplay = await salesOrders.cancelPublicOrder(cancelOrder.id, userId);
+    expect(cancelledReplay.status).toBe("CANCELLED");
+    expect(await movementCount()).toBe(movementsAfterCancel);
+    expect(await physicalByBatch()).toEqual(beforeCancellationPhysical);
+  });
+
   it("releases multi-batch reservations on cancellation and makes cancellation replay safe", async () => {
     await seedBatchStock([
       { name: "cancel-a", quantity: 6, expiryDate: new Date("2027-01-01T00:00:00Z") },
