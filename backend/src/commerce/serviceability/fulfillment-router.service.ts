@@ -55,8 +55,7 @@ export class FulfillmentRouterService {
           left.candidate.inventoryLocation.name.localeCompare(
             right.candidate.inventoryLocation.name,
           ),
-      );
-
+      )
       .map((entry) => entry.candidate.inventoryLocation);
   }
 
