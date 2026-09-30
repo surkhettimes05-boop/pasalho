@@ -54,7 +54,7 @@
     "@nestjs/jwt": "^11.0.0",
     "@nestjs/passport": "^10.0.0",
     "@nestjs/platform-express": "^10.2.0",
-    "@nestjs/serve-static": "^5.0.5",
+    "@nestjs/serve-static": "^4.0.2",
     "@nestjs/swagger": "^7.0.0",
     "@nestjs/throttler": "^5.1.2",
     "@prisma/client": "^5.3.0",
