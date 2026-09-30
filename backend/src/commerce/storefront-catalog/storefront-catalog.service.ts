@@ -10,22 +10,30 @@ import {
 import { StorefrontAvailabilityService } from './availability.service';
 import { StorefrontPricingService } from './pricing.service';
 
-const productInclude = {
-  product: {
-    include: {
-      category: true,
-      brand: true,
-      productGroup: true,
-      defaultUnit: true,
-      productUnits: true,
-      images: { orderBy: { sortOrder: 'asc' as const } },
-      snapshots: {
-        where: { stockState: 'AVAILABLE' as const, baseQuantity: { gt: 0 } },
-        include: { batch: true },
+function productIncludeForLocation(
+  locationId: string,
+): Prisma.StoreProductConfigInclude {
+  return {
+    product: {
+      include: {
+        category: true,
+        brand: true,
+        productGroup: true,
+        defaultUnit: true,
+        productUnits: true,
+        images: { orderBy: { sortOrder: 'asc' as const } },
+        snapshots: {
+          where: {
+            locationId,
+            stockState: 'AVAILABLE',
+            baseQuantity: { gt: 0 },
+          },
+          include: { batch: true },
+        },
       },
     },
-  },
-} satisfies Prisma.StoreProductConfigInclude;
+  };
+}
 
 @Injectable()
 export class StorefrontCatalogService {
@@ -48,7 +56,7 @@ export class StorefrontCatalogService {
           category: { status: 'ACTIVE' },
         },
       },
-      include: productInclude,
+      include: productIncludeForLocation(locationId),
       orderBy: [{ sortRank: 'asc' }, { product: { name: 'asc' } }],
     });
 
@@ -98,7 +106,7 @@ export class StorefrontCatalogService {
     const [configs, total] = await Promise.all([
       this.prisma.storeProductConfig.findMany({
         where,
-        include: productInclude,
+        include: productIncludeForLocation(query.locationId),
         orderBy: [{ sortRank: 'asc' }, { product: { name: 'asc' } }],
         skip: (query.page - 1) * query.limit,
         take: query.limit,
@@ -146,7 +154,7 @@ export class StorefrontCatalogService {
     const [configs, total] = await Promise.all([
       this.prisma.storeProductConfig.findMany({
         where,
-        include: productInclude,
+        include: productIncludeForLocation(query.locationId),
         orderBy: [{ sortRank: 'asc' }, { product: { name: 'asc' } }],
         skip: (query.page - 1) * query.limit,
         take: query.limit,
@@ -171,7 +179,7 @@ export class StorefrontCatalogService {
           OR: [{ slug: identifier }, { skuCode: identifier }, { id: identifier }],
         },
       },
-      include: productInclude,
+      include: productIncludeForLocation(locationId),
     });
     if (!config) throw new AppError(ErrorCodes.NOT_FOUND, 'Storefront product not found.', 404);
 
@@ -190,7 +198,7 @@ export class StorefrontCatalogService {
               deletedAt: null,
             },
           },
-          include: productInclude,
+          include: productIncludeForLocation(locationId),
           orderBy: [{ sortRank: 'asc' }, { product: { name: 'asc' } }],
         })
       : [config];
@@ -218,7 +226,7 @@ export class StorefrontCatalogService {
         isVisible: true,
         product: { isActive: true, storefrontVisible: true, deletedAt: null },
       },
-      include: productInclude,
+      include: productIncludeForLocation(locationId),
     });
     if (!config) throw new AppError(ErrorCodes.PRODUCT_NOT_ORDERABLE, 'Product is not orderable at this store.', 422);
 
