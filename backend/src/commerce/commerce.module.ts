@@ -8,6 +8,7 @@ import { StorefrontCatalogModule } from './storefront-catalog/storefront-catalog
 import { CheckoutModule } from './checkout/checkout.module';
 import { CartsModule } from './carts/carts.module';
 import { CustomerOrdersModule } from './orders/orders.module';
+import { StorefrontFulfillmentModule } from './fulfillment/fulfillment.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { CustomerOrdersModule } from './orders/orders.module';
     CheckoutModule,
     CartsModule,
     CustomerOrdersModule,
+    StorefrontFulfillmentModule,
   ],
   providers: [StorefrontSystemActorService],
   exports: [StorefrontSystemActorService],

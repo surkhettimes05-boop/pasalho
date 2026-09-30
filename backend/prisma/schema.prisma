@@ -60,6 +60,11 @@ enum CommercePaymentStatus {
   PARTIALLY_REFUNDED
 }
 
+enum FulfillmentShortageAction {
+  REMOVE_ITEM
+  CONTACT_CUSTOMER
+}
+
 enum OrderStatusEventActor {
   CUSTOMER
   STAFF
@@ -419,6 +424,7 @@ model User {
   closedCashSessions       CashSession[]        @relation("CashSessionCloser")
   requestedCreditApprovals CreditApproval[]     @relation("CreditApprovalRequester")
   approvedCreditApprovals  CreditApproval[]     @relation("CreditApprovalApprover")
+  fulfillmentPickItems     FulfillmentPickItem[] @relation("FulfillmentPickActor")
 
   @@index([status])
   @@index([defaultBranchId])
@@ -1684,9 +1690,32 @@ model SalesOrderItem {
   batch            Batch?                 @relation(fields: [batchId], references: [id], onDelete: Restrict)
   unit             Unit                   @relation(fields: [unitId], references: [id], onDelete: Restrict)
   reservationItems StockReservationItem[]
+  fulfillmentPick  FulfillmentPickItem?
 
   @@index([salesOrderId])
   @@index([productId])
+}
+
+model FulfillmentPickItem {
+  id               String                     @id @default(uuid())
+  salesOrderItemId String                     @unique
+  orderedQuantity  Decimal                    @db.Decimal(18, 6)
+  orderedBaseQty   Decimal                    @db.Decimal(18, 6)
+  pickedQuantity   Decimal                    @default(0) @db.Decimal(18, 6)
+  pickedBaseQty    Decimal                    @default(0) @db.Decimal(18, 6)
+  shortageBaseQty  Decimal                    @default(0) @db.Decimal(18, 6)
+  shortageAction   FulfillmentShortageAction?
+  isResolved       Boolean                    @default(false)
+  note             String?
+  pickedById       String?
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+
+  salesOrderItem SalesOrderItem @relation(fields: [salesOrderItemId], references: [id], onDelete: Cascade)
+  pickedBy       User?          @relation("FulfillmentPickActor", fields: [pickedById], references: [id], onDelete: SetNull)
+
+  @@index([pickedById])
+  @@index([isResolved])
 }
 
 model StockReservation {

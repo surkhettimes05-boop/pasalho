@@ -293,4 +293,69 @@ export class StorefrontReservationService {
 
     return { releasedReservationIds: reservations.map((reservation) => reservation.id) };
   }
+
+  async releaseOrderItem(
+    tx: Prisma.TransactionClient,
+    input: {
+      salesOrderId: string;
+      salesOrderItemId: string;
+      branchId: string;
+      createdById: string;
+      reason: string;
+    },
+  ) {
+    const reservations = await tx.stockReservation.findMany({
+      where: {
+        salesOrderId: input.salesOrderId,
+        status: StockReservationStatus.ACTIVE,
+      },
+      include: {
+        items: {
+          where: { salesOrderItemId: input.salesOrderItemId },
+        },
+      },
+    });
+
+    let releasedAllocations = 0;
+    for (const stockReservation of reservations) {
+      for (const item of stockReservation.items) {
+        await this.stockReservation.releaseStock(
+          {
+            branchId: input.branchId,
+            locationId: stockReservation.locationId,
+            productId: item.productId,
+            batchId: item.batchId ?? undefined,
+            unitId: item.unitId,
+            quantity: Number(item.quantity),
+            baseQuantity: Number(item.baseQuantity),
+            referenceType: ReferenceType.SALES_ORDER,
+            referenceId: input.salesOrderId,
+            createdById: input.createdById,
+            reason: input.reason,
+          },
+          tx,
+          false,
+        );
+        await tx.stockReservationItem.delete({ where: { id: item.id } });
+        releasedAllocations += 1;
+      }
+
+      const remaining = await tx.stockReservationItem.count({
+        where: { reservationId: stockReservation.id },
+      });
+      if (remaining === 0) {
+        await tx.stockReservation.update({
+          where: { id: stockReservation.id },
+          data: {
+            status: StockReservationStatus.RELEASED,
+            releasedAt: new Date(),
+            expiresAt: null,
+          },
+        });
+      }
+    }
+
+    return { releasedAllocations };
+  }
+
 }
