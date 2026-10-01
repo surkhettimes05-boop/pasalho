@@ -79,7 +79,8 @@ async function main() {
     await transfers.dispatch(transfer.id, actor.id, 'v1-dispatch');
     assert.equal(await physical(warehouseLoc.id), 80); assert.equal(await physical(surkhetLoc.id), 0);
     await child('ceo', 'receipt', { ACCEPTANCE_TRANSFER_ID: transfer.id });
-    assert.deepEqual(await stock(), { Warehouse: 80, SurkhetLedger: 20, Store2Ledger: 0 });
+    // The accepted receipt boundary transfers custody to CEO's store ledger.
+    assert.deepEqual(await stock(), { Warehouse: 80, SurkhetLedger: 0, Store2Ledger: 0 });
     assert.deepEqual(read('ceo').stock, { Surkhet: 20, Store2: 0 });
   });
   await step('D', async () => {
@@ -87,7 +88,8 @@ async function main() {
     await transfers.dispatch(transfer.id, actor.id, 'v1-dispatch');
     await child('ceo', 'receipt', { ACCEPTANCE_TRANSFER_ID: transfer.id });
     assert.equal(await p.inventoryEvent.count(), before);
-    assert.deepEqual(await stock(), { Warehouse: 80, SurkhetLedger: 20, Store2Ledger: 0 });
+    assert.deepEqual(await stock(), { Warehouse: 80, SurkhetLedger: 0, Store2Ledger: 0 });
+    assert.deepEqual(read('ceo').stock, { Surkhet: 20, Store2: 0 });
   });
   await step('E', async () => {
     const partner = await franchise.createPartner({ name: 'Acceptance Franchise', phone: '9800000002' });
@@ -134,7 +136,8 @@ async function main() {
     assert.equal(available.reduce((sum, row) => sum + Number(row.baseQuantity), 0), 63);
     for (const status of ['PICKING','PACKED','DISPATCHED','DELIVERED']) await sales.updateStatus(id, status, actor.id);
     await sales.updateStatus(id, 'DELIVERED', actor.id);
-    assert.deepEqual(await stock(), { Warehouse: 63, SurkhetLedger: 20, Store2Ledger: 0 });
+    assert.deepEqual(await stock(), { Warehouse: 63, SurkhetLedger: 0, Store2Ledger: 0 });
+    assert.deepEqual(read('ceo').stock, { Surkhet: 20, Store2: 0 });
     await child('commerce', 'deliver');
   });
   await step('H', async () => {
@@ -160,7 +163,16 @@ async function main() {
     }
     const duplicateEvents = await p.$queryRawUnsafe('SELECT "idempotencyKey",COUNT(*) FROM "InventoryEvent" WHERE "idempotencyKey" IS NOT NULL GROUP BY "idempotencyKey" HAVING COUNT(*) > 1');
     assert.equal(duplicateEvents.length, 0);
-    report.assertions.push('Batch snapshots equal ledger movements at every location/state', 'One goods receipt, transfer receipt, franchise receipt, invoice, payment and POS sale; replay checks did not add records');
+    assert.equal(await p.goodsReceipt.count(), 1);
+    assert.equal(await p.stockTransfer.count(), 1);
+    assert.equal(await p.inventoryEvent.count({ where: { idempotencyKey: `transfer-receive-origin-${transfer.id}` } }), 1);
+    assert.equal(await p.franchiseSupplyOrder.count(), 1);
+    assert.equal(await p.invoice.count(), 1); assert.equal(await p.payment.count(), 1);
+    assert.equal(await p.retailerLedgerEntry.count(), 2);
+    // One product and one named batch: reconcile custody across the real receipt
+    // boundary, plus the three independently verified sales outflows.
+    assert.equal(report.finalInventory.Warehouse + report.finalInventory.Franchise + report.finalInventory.Surkhet + 5 + 2 + 3, 100);
+    report.assertions.push('Named-batch snapshots equal PASALHO movements at every location/state; received custody plus CEO sales reconcile the 100-unit batch', 'One goods receipt, transfer receipt, franchise order, invoice, payment and POS sale; two balanced retailer entries; replay checks did not add records');
   });
 }
 main().catch((error) => { report.blocker = error.stack; process.exitCode = 1; }).finally(async () => {

@@ -38,5 +38,15 @@ try {
   } else if (command !== 'snapshot') throw new Error(`Unknown command ${command}`);
   const qty = async (location_id) => Number((await prisma.stockBalance.findUnique({ where: { product_id_location_id: { product_id: state.product, location_id } } }))?.quantity ?? 0);
   state.stock = { Surkhet: await qty(state.surkhet), Store2: await qty(state.store2) };
+  if (command === 'snapshot') {
+    assert.equal(await prisma.transferReceipt.count(), 1);
+    assert.equal(await prisma.sale.count(), 1);
+    const movements = await prisma.inventoryTransaction.findMany({ where: { product_id: state.product } });
+    assert.equal(movements.length, 2, 'Exactly one receipt and one POS stock movement');
+    for (const location of [state.surkhet, state.store2]) {
+      assert.equal(movements.filter(row => row.location_id === location).reduce((sum, row) => sum + Number(row.quantity), 0), await qty(location));
+    }
+    state.reconciliation = { receipts: 1, sales: 1, movements: movements.length };
+  }
   fs.writeFileSync(file, JSON.stringify(state));
 } finally { await prisma.$disconnect(); }
