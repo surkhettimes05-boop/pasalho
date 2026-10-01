@@ -1,0 +1,127 @@
+name: V1 fresh database A-J acceptance
+on:
+  workflow_dispatch:
+    inputs:
+      commerce_sha:
+        description: Green reconciled Commerce commit
+        required: true
+        type: string
+      flutter_sha:
+        description: Green reconciled Flutter commit
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable-ci-only
+          POSTGRES_DB: pasalho_v1_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:disposable-ci-only@127.0.0.1:5432/pasalho_v1_test
+      CEO_DATABASE_URL: postgresql://postgres:disposable-ci-only@127.0.0.1:5432/ceo_v1_test
+      COMMERCE_DATABASE_URL: postgresql://postgres:disposable-ci-only@127.0.0.1:5432/commerce_v1_test
+      REDIS_URL: redis://127.0.0.1:6379
+      JWT_SECRET: disposable-ci-jwt-secret-at-least-32-chars
+      JWT_REFRESH_SECRET: disposable-ci-refresh-secret-at-least-32-chars
+      COOKIE_SECRET: disposable-ci-cookie-secret-at-least-32-chars
+      OTP_HASH_SECRET: disposable-ci-otp-secret-at-least-32-chars
+      SIGNATURE_SECRET: disposable-ci-signature-secret-at-least-32-chars
+      FEEDBACK_TOKEN_SECRET: disposable-ci-feedback-secret-at-least-32-chars
+      ENCRYPTION_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+      PAYMENT_ENCRYPTION_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+      DATABASE_SSL: 'false'
+      ENABLE_ADMIN_API: 'true'
+      STORE_SYNC_WEBHOOK_SECRET: disposable-ci-integration-secret-at-least-32-chars
+      PASALO_INTEGRATION_SECRET: disposable-ci-integration-secret-at-least-32-chars
+      PASALHO_API_KEY: disposable-ci-integration-secret-at-least-32-chars
+      PASALO_WEBHOOK_SECRET: disposable-ci-integration-secret-at-least-32-chars
+      PASALO_CATALOG_API_KEY: disposable-ci-integration-secret-at-least-32-chars
+      PASALHO_API_URL: http://127.0.0.1:43201/api/v1
+      PASALO_CATALOG_API_URL: http://127.0.0.1:43201/api/v1/catalog/products
+      PASALO_RECEIPT_ACK_URL: http://127.0.0.1:43201/api/v1/integrations/store-receipts
+      PASALO_ALLOWED_BRANCH_CODES: SURKHET,STORE-2
+      STORE_SYNC_WEBHOOK_URL: http://127.0.0.1:43202/api/sync/inbound-transfers
+      RATE_LIMIT_MAX_REQUESTS: '10000'
+      BOOTSTRAP_ADMIN_USERNAME: ci-admin
+      BOOTSTRAP_ADMIN_EMAIL: ci@example.invalid
+      BOOTSTRAP_ADMIN_PASSWORD: Disposable-CI-Only!2026
+      CEO_SHA: dd435a325803c882c9c0c2784f44652ef2ae4e2d
+      COMMERCE_SHA: ${{ inputs.commerce_sha }}
+      FLUTTER_SHA: ${{ inputs.flutter_sha }}
+      PASALHO_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Checkout pinned public repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/surkhettimes05-boop/ceodashboard.git "$RUNNER_TEMP/ceo"
+          git -C "$RUNNER_TEMP/ceo" checkout --detach "$CEO_SHA"
+          git clone --no-checkout https://github.com/surkhettimes05-boop/modern-trade-website.git "$RUNNER_TEMP/commerce"
+          git -C "$RUNNER_TEMP/commerce" checkout --detach "$COMMERCE_SHA"
+          echo "CEO_ROOT=$RUNNER_TEMP/ceo" >> "$GITHUB_ENV"
+          echo "COMMERCE_ROOT=$RUNNER_TEMP/commerce" >> "$GITHUB_ENV"
+          echo "ACCEPTANCE_EVIDENCE=$RUNNER_TEMP/evidence" >> "$GITHUB_ENV"
+      - name: Create fresh databases and build real implementations
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PGPASSWORD=disposable-ci-only
+          createdb -h 127.0.0.1 -U postgres ceo_v1_test
+          createdb -h 127.0.0.1 -U postgres commerce_v1_test
+          npm ci --prefix backend
+          (cd backend && npx prisma generate && npx prisma migrate deploy && npm run build)
+          npm ci --prefix "$CEO_ROOT/backend"
+          (cd "$CEO_ROOT/backend" && DATABASE_URL="$CEO_DATABASE_URL" npx prisma generate && DATABASE_URL="$CEO_DATABASE_URL" npx prisma migrate deploy && npm run build)
+          npm ci --prefix "$COMMERCE_ROOT/backend"
+          (cd "$COMMERCE_ROOT/backend" && npm run build && NODE_ENV=development DATABASE_URL="$COMMERCE_DATABASE_URL" npm run db:migrate && NODE_ENV=development DATABASE_URL="$COMMERCE_DATABASE_URL" npm run seed && NODE_ENV=development DATABASE_URL="$COMMERCE_DATABASE_URL" npx tsx src/database/bootstrapAdmin.ts)
+      - name: Start PASALHO and CEO APIs and execute A-J
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$ACCEPTANCE_EVIDENCE"
+          (cd backend && PORT=43201 node dist/main.js) > "$ACCEPTANCE_EVIDENCE/pasalho.log" 2>&1 &
+          pasalho_pid=$!
+          (cd "$CEO_ROOT/backend" && PORT=43202 DATABASE_URL="$CEO_DATABASE_URL" node dist/server.js) > "$ACCEPTANCE_EVIDENCE/ceo.log" 2>&1 &
+          ceo_pid=$!
+          trap 'kill "$pasalho_pid" "$ceo_pid" 2>/dev/null || true' EXIT
+          for port in 43201 43202; do
+            for attempt in $(seq 1 60); do
+              if curl -s -o /dev/null "http://127.0.0.1:$port"; then break; fi
+              sleep 1
+            done
+            curl -s -o /dev/null "http://127.0.0.1:$port"
+          done
+          node scripts/v1-acceptance.cjs
+      - name: Upload reconciliation evidence without session tokens
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1-acceptance-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/evidence/acceptance.json
+            ${{ runner.temp }}/evidence/commerce-public.json
+            ${{ runner.temp }}/evidence/ceo.json
+            ${{ runner.temp }}/evidence/pasalho.log
+            ${{ runner.temp }}/evidence/ceo.log
