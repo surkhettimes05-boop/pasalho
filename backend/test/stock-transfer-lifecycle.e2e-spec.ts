@@ -3,6 +3,7 @@ import { AuditLogService } from "../src/audit/audit-log.service";
 import { PrismaService } from "../src/database/prisma.service";
 import { InventoryLedgerService } from "../src/inventory/services/inventory-ledger.service";
 import { StockTransferService } from "../src/inventory/services/stock-transfer.service";
+import { StockReservationService } from "../src/inventory/services/stock-reservation.service";
 import { InvoiceService } from "../src/sales/invoice.service";
 import { RetailerLedgerService } from "../src/finance/retailer-ledger/retailer-ledger.service";
 
@@ -101,6 +102,7 @@ describe("Warehouse to store transfer lifecycle (real PostgreSQL)", () => {
       new AuditLogService(prisma),
       ledger,
       new RetailerLedgerService(prisma),
+      new StockReservationService(prisma, ledger, new AuditLogService(prisma)),
     );
 
     const [fromBranch, toBranch] = await Promise.all([

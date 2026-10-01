@@ -96,6 +96,17 @@ jobs:
           (cd "$CEO_ROOT/backend" && DATABASE_URL="$CEO_DATABASE_URL" npx prisma generate && DATABASE_URL="$CEO_DATABASE_URL" npx prisma migrate deploy && npm run build)
           npm ci --prefix "$COMMERCE_ROOT/backend"
           (cd "$COMMERCE_ROOT/backend" && npm run build && NODE_ENV=development DATABASE_URL="$COMMERCE_DATABASE_URL" npm run db:migrate && NODE_ENV=development DATABASE_URL="$COMMERCE_DATABASE_URL" npm run seed && NODE_ENV=development DATABASE_URL="$COMMERCE_DATABASE_URL" npx tsx src/database/bootstrapAdmin.ts)
+      - name: Verify dispatch replay after receipt on an isolated regression database
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$ACCEPTANCE_EVIDENCE"
+          export PGPASSWORD=disposable-ci-only
+          createdb -h 127.0.0.1 -U postgres pasalho_transfer_regression_test
+          export DATABASE_URL=postgresql://postgres:disposable-ci-only@127.0.0.1:5432/pasalho_transfer_regression_test
+          cd backend
+          npx prisma migrate deploy
+          npx jest --config test/jest-e2e.json --runInBand stock-transfer-lifecycle.e2e-spec.ts --testNamePattern='acknowledges once' --json --outputFile="$ACCEPTANCE_EVIDENCE/transfer-regression.json"
       - name: Start PASALHO and CEO APIs and execute A-J
         shell: bash
         run: |
@@ -125,3 +136,4 @@ jobs:
             ${{ runner.temp }}/evidence/ceo.json
             ${{ runner.temp }}/evidence/pasalho.log
             ${{ runner.temp }}/evidence/ceo.log
+            ${{ runner.temp }}/evidence/transfer-regression.json
