@@ -301,6 +301,8 @@ describe("Warehouse to store transfer lifecycle (real PostgreSQL)", () => {
     await transfers.dispatch(transfer.id, userId, `${prefix}-receive-dispatch`);
     await acknowledge(transfer.id, `${prefix}-receive-key`);
     await acknowledge(transfer.id, `${prefix}-receive-retry`);
+    const replay = await transfers.dispatch(transfer.id, userId, `${prefix}-receive-dispatch`);
+    expect(replay.status).toBe("RECEIVED");
     const source = await balances(sourceLocationId);
     const store = await balances(storeLocationId);
     expect(source.get("AVAILABLE")).toBe(5);

@@ -167,6 +167,8 @@ async function main() {
     assert.equal(await p.stockTransfer.count(), 1);
     assert.equal(await p.inventoryEvent.count({ where: { idempotencyKey: `transfer-receive-origin-${transfer.id}` } }), 1);
     assert.equal(await p.franchiseSupplyOrder.count(), 1);
+    assert.equal(await p.inventoryEvent.count({ where: { idempotencyKey: `franchise-receipt-${franchiseOrder.id}` } }), 1);
+    assert.equal(await p.franchiseSupplyOrderEvent.count({ where: { orderId: franchiseOrder.id, toStatus: 'RECEIVED' } }), 1);
     assert.equal(await p.invoice.count(), 1); assert.equal(await p.payment.count(), 1);
     assert.equal(await p.retailerLedgerEntry.count(), 2);
     // One product and one named batch: reconcile custody across the real receipt

@@ -276,7 +276,8 @@ export class StockTransferService {
       });
       if (
         transfer.status === StockTransferStatus.IN_TRANSIT ||
-        transfer.status === StockTransferStatus.SHIPPED
+        transfer.status === StockTransferStatus.SHIPPED ||
+        transfer.status === StockTransferStatus.RECEIVED
       )
         return transfer;
       if (transfer.status !== StockTransferStatus.CONFIRMED) {
