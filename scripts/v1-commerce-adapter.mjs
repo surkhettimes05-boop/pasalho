@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 const load = (file) => import(pathToFileURL(path.resolve(process.env.COMMERCE_ROOT, 'backend/dist', file)));
 const { query, closePool } = await load('database/connection.js');
@@ -10,6 +11,7 @@ const { SessionService } = await load('services/sessionService.js');
 const { CustomerService } = await load('services/customerService.js');
 const { ShoppingCartService } = await load('services/shoppingCartService.js');
 const { CheckoutService } = await load('services/checkoutService.js');
+const { encryptMfaSecret } = await load('utils/totp.js');
 const stateFile = path.resolve(process.env.ACCEPTANCE_EVIDENCE, 'commerce.json');
 const state = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile)) : {};
 const command = process.argv[2];
@@ -18,8 +20,19 @@ try {
   if (command === 'sync') {
     const staff = (await query("SELECT id FROM staff WHERE username = 'ci-admin'")).rows[0];
     assert(staff, 'Disposable acceptance administrator exists');
-    const token = app.jwt.sign({ sub: staff.id, mfaVerified: true });
-    const response = await app.inject({ method: 'POST', url: '/api/admin/products/sync-pasalo', headers: { cookie: `ops_session=${token}` } });
+    const mfaSecret = 'GAYTEMZUGU3DOOBZGAYTEMZUGU3DOOBZ';
+    await query('UPDATE staff SET mfa_enabled=TRUE,mfa_secret=$1 WHERE id=$2', [encryptMfaSecret(mfaSecret), staff.id]);
+    const counter = Buffer.alloc(8);
+    counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
+    const digest = crypto.createHmac('sha1', Buffer.from('01234567890123456789')).update(counter).digest();
+    const offset = digest.at(-1) & 15;
+    const code = String((digest.readUInt32BE(offset) & 0x7fffffff) % 1000000).padStart(6, '0');
+    const login = await app.inject({ method: 'POST', url: '/api/operations-auth/login', payload: { username: 'ci-admin', password: process.env.BOOTSTRAP_ADMIN_PASSWORD, mfa_code: code } });
+    assert.equal(login.statusCode, 200, login.body);
+    const setCookies = [].concat(login.headers['set-cookie'] ?? []);
+    const cookie = setCookies.map((value) => value.split(';')[0]).join('; ');
+    const csrf = setCookies.find((value) => value.startsWith('csrf_token=')).split(';')[0].slice('csrf_token='.length);
+    const response = await app.inject({ method: 'POST', url: '/api/admin/products/sync-pasalo', headers: { cookie, 'x-csrf-token': csrf } });
     assert.equal(response.statusCode, 200, response.body);
     state.product = (await query("SELECT id, pasalo_product_id FROM products WHERE sku = 'V1-BATCH-001'")).rows[0];
     assert.equal(state.product.pasalo_product_id, process.env.CANONICAL_PRODUCT_ID);
