@@ -95,7 +95,9 @@ jobs:
           npm ci --prefix "$CEO_ROOT/backend"
           (cd "$CEO_ROOT/backend" && DATABASE_URL="$CEO_DATABASE_URL" npx prisma generate && DATABASE_URL="$CEO_DATABASE_URL" npx prisma migrate deploy && npm run build)
           npm ci --prefix "$COMMERCE_ROOT/backend"
-          (cd "$COMMERCE_ROOT/backend" && npm run build && NODE_ENV=development DATABASE_URL="$COMMERCE_DATABASE_URL" npm run db:migrate && NODE_ENV=development DATABASE_URL="$COMMERCE_DATABASE_URL" npm run seed && NODE_ENV=development DATABASE_URL="$COMMERCE_DATABASE_URL" npx tsx src/database/bootstrapAdmin.ts)
+          (cd "$COMMERCE_ROOT/backend" && npm run build && NODE_ENV=development DATABASE_URL="$COMMERCE_DATABASE_URL" npm run db:migrate)
+          psql "$COMMERCE_DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/v1-commerce-fixtures.sql
+          (cd "$COMMERCE_ROOT/backend" && NODE_ENV=development DATABASE_URL="$COMMERCE_DATABASE_URL" npx tsx src/database/bootstrapAdmin.ts)
       - name: Verify dispatch replay after receipt on an isolated regression database
         shell: bash
         run: |
