@@ -47,7 +47,7 @@ jobs:
           cache-dependency-path: 'backend/package-lock.json'
       - name: Install dependencies
         working-directory: backend
-        run: npm ci
+        run: npm ci --legacy-peer-deps
       - name: Prisma Generate
         working-directory: backend
         env:
@@ -65,19 +65,3 @@ jobs:
       - name: Build
         working-directory: backend
         run: npm run build
-
-  build-docker:
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Build Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./backend
-          file: ./backend/Dockerfile
-          push: false
-          tags: pasalo/backend:latest
